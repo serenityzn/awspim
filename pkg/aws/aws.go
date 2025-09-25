@@ -3,7 +3,6 @@ package aws
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -11,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-secretsmanager-caching-go/secretcache"
+	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/logger"
 )
 
@@ -90,6 +90,7 @@ func GetAccountName(accountId string) string {
 // SendApprovalNotification sends an approval message to the configured SQS queue
 func SendApprovalNotification(requestor, approver, accountID string) error {
 	log := logger.GetDefaultLogger()
+	cfg := config.Get()
 
 	log.LogAWSOperation("send_approval_notification", logger.Fields{
 		"requestor":  requestor,
@@ -97,17 +98,14 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 		"account_id": accountID,
 	}).Info("Sending approval notification")
 
-	sqsARN := os.Getenv("MANAGER_SQS_ARN")
+	sqsARN := cfg.GetManagerSQSARN()
 	if sqsARN == "" {
-		log.LogAWSOperation("send_approval_notification", logger.Fields{"error": "missing_sqs_arn"}).Error("MANAGER_SQS_ARN environment variable is not set")
-		return fmt.Errorf("MANAGER_SQS_ARN environment variable is not set")
+		log.LogAWSOperation("send_approval_notification", logger.Fields{"error": "missing_sqs_arn"}).Error("MANAGER_SQS_ARN not configured")
+		return fmt.Errorf("MANAGER_SQS_ARN not configured")
 	}
 
-	// Get AWS region from environment variable, default to us-east-2
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-2"
-	}
+	// Get AWS region from config
+	region := cfg.GetAWSRegion()
 
 	// Create AWS session
 	sess, err := session.NewSession(&aws.Config{
@@ -170,19 +168,17 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 
 func getAwsAccounts() (*AwsAccounts, error) {
 	log := logger.GetDefaultLogger()
+	cfg := config.Get()
 
 	log.LogAWSOperation("get_aws_accounts", logger.Fields{"action": "retrieving_from_secrets_manager"}).Debug("Retrieving AWS accounts from Secrets Manager")
 
-	awsAccountsSecret := os.Getenv("AWS_ACCOUNTS_SECRET")
+	awsAccountsSecret := cfg.GetAWSAccountsSecret()
 	if awsAccountsSecret == "" {
-		log.LogAWSOperation("get_aws_accounts", logger.Fields{"error": "missing_secret_name"}).Error("AWS_ACCOUNTS_SECRET environment variable is not set")
-		return nil, fmt.Errorf("AWS_ACCOUNTS_SECRET environment variable is not set")
+		log.LogAWSOperation("get_aws_accounts", logger.Fields{"error": "missing_secret_name"}).Error("AWS_ACCOUNTS_SECRET not configured")
+		return nil, fmt.Errorf("AWS_ACCOUNTS_SECRET not configured")
 	}
 
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-2"
-	}
+	region := cfg.GetAWSRegion()
 
 	sess, err := session.NewSession(&aws.Config{
 		Region: aws.String(region),

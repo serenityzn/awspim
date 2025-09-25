@@ -1,0 +1,35 @@
+# Slack Configuration (REQUIRED)
+slack_bot_token: "xoxb-your-slack-bot-token-here"
+slack_app_token: "xapp-your-slack-app-token-here"
+
+# AWS Configuration (REQUIRED)
+aws_region: "us-east-2"
+aws_accounts_secret: "pim/aws-accounts"
+manager_sqs_arn: "arn:aws:sqs:us-east-2:123456789012:pim-management-queue"
+
+# Application Configuration (OPTIONAL)
+environment: "development"
+log_level: "info"
+
+# Security Configuration (OPTIONAL)
+allowed_channel: "pim-management"
+admin_users:
+  - "volodymyr.l"
+  - "admin.user"
+
+# Environment Variable Mapping:
+# Config File          → Environment Variable
+# slack_bot_token      → AWSPIM_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN
+# slack_app_token      → AWSPIM_SLACK_APP_TOKEN or SLACK_APP_TOKEN  
+# aws_region           → AWSPIM_AWS_REGION or AWS_REGION
+# aws_accounts_secret  → AWSPIM_AWS_ACCOUNTS_SECRET or AWS_ACCOUNTS_SECRET
+# manager_sqs_arn      → AWSPIM_MANAGER_SQS_ARN or MANAGER_SQS_ARN
+# environment          → AWSPIM_ENVIRONMENT or ENVIRONMENT
+# log_level            → AWSPIM_LOG_LEVEL or LOG_LEVEL
+# allowed_channel      → AWSPIM_ALLOWED_CHANNEL
+# admin_users          → AWSPIM_ADMIN_USERS (comma-separated)
+
+# Priority Order:
+# 1. Config file values (this file)
+# 2. Environment variables
+# 3. Default values (see config/config.go)

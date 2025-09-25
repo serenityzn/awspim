@@ -2,7 +2,6 @@ package slack
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -10,6 +9,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 
 	awspkg "github.com/serenityzn/awspim/pkg/aws"
+	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/logger"
 )
 
@@ -29,9 +29,10 @@ type SlackClient struct {
 
 // NewSlackClient creates a new Slack client
 func NewSlackClient() (*SlackClient, error) {
-	token := os.Getenv("SLACK_BOT_TOKEN")
+	cfg := config.Get()
+	token := cfg.GetSlackBotToken()
 	if token == "" {
-		return nil, fmt.Errorf("SLACK_BOT_TOKEN environment variable is not set")
+		return nil, fmt.Errorf("SLACK_BOT_TOKEN not configured")
 	}
 
 	client := slack.New(token, slack.OptionDebug(false))
@@ -62,15 +63,16 @@ func (sc *SlackClient) SendMessageToUser(userID, message string) error {
 // StartSlackBot starts the Socket Mode bot for slash commands (optional)
 func StartSlackBot() error {
 	log := logger.GetDefaultLogger()
-	
+	cfg := config.Get()
+
 	log.LogSlackOperation("start_bot", logger.Fields{"action": "initializing"}).Info("Starting Slack bot initialization")
-	
-	token := os.Getenv("SLACK_BOT_TOKEN")
-	appToken := os.Getenv("SLACK_APP_TOKEN")
+
+	token := cfg.GetSlackBotToken()
+	appToken := cfg.GetSlackAppToken()
 
 	if token == "" || appToken == "" {
-		log.LogSlackOperation("start_bot", logger.Fields{"error": "missing_tokens"}).Error("SLACK_BOT_TOKEN and SLACK_APP_TOKEN environment variables must be set")
-		return fmt.Errorf("SLACK_BOT_TOKEN and SLACK_APP_TOKEN environment variables must be set")
+		log.LogSlackOperation("start_bot", logger.Fields{"error": "missing_tokens"}).Error("SLACK_BOT_TOKEN and SLACK_APP_TOKEN not configured")
+		return fmt.Errorf("SLACK_BOT_TOKEN and SLACK_APP_TOKEN not configured")
 	}
 
 	client := slack.New(token, slack.OptionDebug(false), slack.OptionAppLevelToken(appToken))
@@ -125,7 +127,8 @@ func NewHandler(client *slack.Client) Handler {
 
 func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client) error {
 	log := logger.GetDefaultLogger()
-	
+	cfg := config.Get()
+
 	switch evt.Type {
 	case socketmode.EventTypeSlashCommand:
 		cmd, ok := evt.Data.(slack.SlashCommand)
@@ -158,7 +161,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				return err
 			}
 
-			if channelInfo.Name != "pim-management" {
+			if channelInfo.Name != cfg.GetAllowedChannel() {
 				log.LogSecurityEvent("unauthorized_channel_usage", logger.Fields{
 					"user_id": cmd.UserID,
 					"channel_name": channelInfo.Name,
@@ -166,7 +169,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					"command": cmd.Command,
 				}).Warn("User attempted to use /pim command in unauthorized channel")
 				
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText("This command can only be used in the #pim-management channel.", false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(fmt.Sprintf("This command can only be used in the #%s channel.", cfg.GetAllowedChannel()), false))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send error message")
 					return err
@@ -286,7 +289,8 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 
 func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Client) error {
 	log := logger.GetDefaultLogger()
-	
+	cfg := config.Get()
+
 	interaction, ok := evt.Data.(slack.InteractionCallback)
 	if !ok {
 		log.LogSlackOperation("handle_interaction", logger.Fields{"error": "type_cast_failed"}).Error("Could not type cast the event to InteractionCallback")
@@ -327,9 +331,9 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 					approverUser = fmt.Sprintf("<@%s>", interaction.User.ID)
 				}
 
-					// Check if the user is trying to approve their own request
-					// Exception: 'volodymyr.l' is allowed to self-approve
-					if requestedUserID == approverUserID && approverUser != "volodymyr.l" {
+				// Check if the user is trying to approve their own request
+				// Exception: admin users are allowed to self-approve
+				if requestedUserID == approverUserID && !cfg.IsAdminUser(approverUser) {
 						log.LogSecurityEvent("self_approval_attempt", logger.Fields{
 							"user_id": approverUserID,
 							"approver_user": approverUser,

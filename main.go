@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
+	
 	awspkg "github.com/serenityzn/awspim/pkg/aws"
+	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/logger"
 	slackpkg "github.com/serenityzn/awspim/pkg/slack"
 )
@@ -18,9 +21,17 @@ func (e MyEvent) checkAwsAccountId() bool {
 }
 
 func init() {
-	log := logger.GetDefaultLogger()
+	// Load configuration first
+	_, err := config.Load()
+	if err != nil {
+		// Can't use logger yet as it might depend on config
+		panic(fmt.Sprintf("Failed to load configuration: %v", err))
+	}
 	
-	err := awspkg.Initialize()
+	log := logger.GetDefaultLogger()
+	log.Info("Configuration loaded successfully")
+	
+	err = awspkg.Initialize()
 	if err != nil {
 		log.WithError(err).Error("Failed to initialize AWS package")
 		// Don't exit for Lambda, just log the error
