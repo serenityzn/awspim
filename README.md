@@ -258,8 +258,248 @@ go run main.go
 
 ## 📄 License
 
-[Add your license information here]
+[GNU General Public License v3.0]
 
 ## 🤝 Contributing
 
-[Add contribution guidelines here]
+We welcome contributions to AWS PIM! Please follow these guidelines to ensure a smooth collaboration process.
+
+### 🚀 Getting Started
+
+1. **Fork the repository** on GitHub
+2. **Clone your fork** locally:
+   ```bash
+   git clone https://github.com/your-username/awspim.git
+   cd awspim
+   ```
+3. **Create a feature branch**:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+### 🛠️ Development Setup
+
+1. **Install Go 1.23.3 or later**
+2. **Install dependencies**:
+   ```bash
+   go mod tidy
+   ```
+3. **Set up your environment**:
+   ```bash
+   cp config.yaml.example config.yaml
+   # Edit config.yaml with your test values
+   ```
+4. **Run the application**:
+   ```bash
+   go run main.go
+   ```
+
+### 📝 Code Standards
+
+#### **Go Style Guidelines**
+- Follow [Effective Go](https://golang.org/doc/effective_go.html) principles
+- Use `gofmt` for code formatting
+- Run `go vet` to check for issues
+- Use meaningful variable and function names
+- Add comments for exported functions and complex logic
+
+#### **Project Structure**
+```
+pkg/
+├── config/     # Configuration management
+├── logger/     # Structured logging
+├── aws/        # AWS integrations
+└── slack/      # Slack bot functionality
+```
+
+#### **Naming Conventions**
+- **Functions**: `CamelCase` for exported, `camelCase` for internal
+- **Variables**: `camelCase`
+- **Constants**: `UPPER_SNAKE_CASE`
+- **Files**: `snake_case.go`
+
+### 🧪 Testing
+
+#### **Running Tests**
+```bash
+# Run all tests
+go test ./...
+
+# Run tests with coverage
+go test -cover ./...
+
+# Run tests for specific package
+go test ./pkg/config
+```
+
+#### **Writing Tests**
+- Place tests in `*_test.go` files
+- Use table-driven tests where appropriate
+- Mock external dependencies (AWS, Slack)
+- Test both success and error cases
+
+**Example test structure:**
+```go
+func TestConfigLoad(t *testing.T) {
+    tests := []struct {
+        name    string
+        setup   func()
+        want    *Config
+        wantErr bool
+    }{
+        // Test cases
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Test implementation
+        })
+    }
+}
+```
+
+### 🔒 Security Guidelines
+
+- **Never commit secrets** or credentials
+- **Validate all inputs** from Slack and external sources
+- **Use structured logging** for security events
+- **Follow least privilege** principle for AWS permissions
+- **Sanitize user inputs** before logging or processing
+
+### 📊 Logging Standards
+
+Use the structured logger for all log messages:
+```go
+log := logger.GetDefaultLogger()
+
+// Good examples
+log.LogUserAction(userID, "action_name", logger.Fields{
+    "account_id": accountID,
+    "additional": "context",
+}).Info("User performed action")
+
+log.LogSecurityEvent("event_type", logger.Fields{
+    "user_id": userID,
+    "details": "specific_details",
+}).Warn("Security event occurred")
+```
+
+### 🚨 Error Handling
+
+- **Return errors** instead of panicking
+- **Wrap errors** with context using `fmt.Errorf`
+- **Log errors** with appropriate context
+- **Handle errors gracefully** in user-facing operations
+
+```go
+// Good error handling
+result, err := someOperation()
+if err != nil {
+    log.WithError(err).Error("Operation failed")
+    return fmt.Errorf("failed to perform operation: %w", err)
+}
+```
+
+### 📋 Pull Request Process
+
+#### **Before Submitting**
+1. **Test your changes**:
+   ```bash
+   go test ./...
+   go vet ./...
+   go fmt ./...
+   ```
+2. **Update documentation** if needed
+3. **Add/update tests** for new functionality
+4. **Ensure no linting errors**
+
+#### **PR Requirements**
+- **Clear title** describing the change
+- **Detailed description** explaining what and why
+- **Link related issues** if applicable
+- **Small, focused changes** (prefer multiple small PRs)
+- **Updated tests** for new functionality
+
+#### **PR Template**
+```markdown
+## Description
+Brief description of changes
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation update
+
+## Testing
+- [ ] Tests pass locally
+- [ ] New tests added for new functionality
+- [ ] Manual testing completed
+
+## Checklist
+- [ ] Code follows project style guidelines
+- [ ] Self-review completed
+- [ ] Documentation updated
+- [ ] No sensitive information committed
+```
+
+### 🏷️ Commit Guidelines
+
+#### **Commit Message Format**
+```
+type(scope): short description
+
+Longer description if needed
+
+Fixes #123
+```
+
+#### **Types**
+- `feat`: New features
+- `fix`: Bug fixes
+- `docs`: Documentation changes
+- `style`: Code style changes (formatting, etc.)
+- `refactor`: Code refactoring
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks
+
+#### **Examples**
+```bash
+feat(slack): add support for custom approval messages
+fix(aws): handle empty SQS ARN configuration
+docs(readme): update installation instructions
+test(config): add validation tests for required fields
+```
+
+### 🐛 Reporting Issues
+
+When reporting bugs, please include:
+- **Go version** (`go version`)
+- **Operating system** and version
+- **Steps to reproduce** the issue
+- **Expected vs actual behavior**
+- **Error messages** and logs
+- **Configuration** (sanitized, no secrets)
+
+### 💡 Feature Requests
+
+For new features, please provide:
+- **Use case** description
+- **Proposed solution** or approach
+- **Alternative solutions** considered
+- **Additional context** or examples
+
+### 📞 Getting Help
+
+- **GitHub Issues** for bugs and feature requests
+- **GitHub Discussions** for questions and general discussion
+- **Code Review** feedback is always welcome
+
+### 🙏 Recognition
+
+Contributors will be recognized in:
+- **GitHub contributors** page
+- **Release notes** for significant contributions
+- **Documentation** credits
+
+Thank you for contributing to AWS PIM! 🚀
