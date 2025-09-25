@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-secretsmanager-caching-go/secretcache"
+	"github.com/serenityzn/awspim/pkg/logger"
 )
 
 type AwsAccount struct {
@@ -34,11 +35,22 @@ var globalAwsAccounts *AwsAccounts
 
 // Initialize loads AWS accounts from Secrets Manager and stores them globally
 func Initialize() error {
+	log := logger.GetDefaultLogger()
+
+	log.LogAWSOperation("initialize", logger.Fields{"action": "loading_accounts"}).Info("Initializing AWS accounts")
+
 	result, err := getAwsAccounts()
 	if err != nil {
+		log.LogAWSOperation("initialize", logger.Fields{"action": "loading_accounts"}).WithError(err).Error("Failed to retrieve AWS accounts")
 		return fmt.Errorf("error retrieving AWS accounts: %v", err)
 	}
+
 	globalAwsAccounts = result
+	log.LogAWSOperation("initialize", logger.Fields{
+		"action":         "loading_accounts",
+		"accounts_count": len(result.Accounts),
+	}).Info("AWS accounts loaded successfully")
+
 	return nil
 }
 
@@ -52,7 +64,7 @@ func ValidateAccountId(accountId string) bool {
 	if globalAwsAccounts == nil {
 		return false
 	}
-	
+
 	for _, account := range globalAwsAccounts.Accounts {
 		if account.AccountId == accountId {
 			return true
@@ -66,7 +78,7 @@ func GetAccountName(accountId string) string {
 	if globalAwsAccounts == nil {
 		return ""
 	}
-	
+
 	for _, account := range globalAwsAccounts.Accounts {
 		if account.AccountId == accountId {
 			return account.AccountName
@@ -77,8 +89,18 @@ func GetAccountName(accountId string) string {
 
 // SendApprovalNotification sends an approval message to the configured SQS queue
 func SendApprovalNotification(requestor, approver, accountID string) error {
+	log := logger.GetDefaultLogger()
+
+	log.LogAWSOperation("send_approval_notification", logger.Fields{
+		"requestor":  requestor,
+		"approver":   approver,
+		"account_id": accountID,
+	}).Info("Sending approval notification")
+
 	sqsARN := os.Getenv("MANAGER_SQS_ARN")
+	fmt.Printf("sqsARN: %s\n", sqsARN)
 	if sqsARN == "" {
+		log.LogAWSOperation("send_approval_notification", logger.Fields{"error": "missing_sqs_arn"}).Error("MANAGER_SQS_ARN environment variable is not set")
 		return fmt.Errorf("MANAGER_SQS_ARN environment variable is not set")
 	}
 
@@ -93,6 +115,7 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 		Region: aws.String(region),
 	})
 	if err != nil {
+		log.LogAWSOperation("send_approval_notification", logger.Fields{"region": region}).WithError(err).Error("Failed to create AWS session")
 		return fmt.Errorf("failed to create AWS session: %v", err)
 	}
 
@@ -129,15 +152,31 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 		},
 	})
 	if err != nil {
+		log.LogAWSOperation("send_approval_notification", logger.Fields{
+			"queue_url":  sqsARN,
+			"account_id": accountID,
+		}).WithError(err).Error("Failed to send SQS message")
 		return fmt.Errorf("failed to send SQS message: %v", err)
 	}
+
+	log.LogAWSOperation("send_approval_notification", logger.Fields{
+		"requestor":  requestor,
+		"approver":   approver,
+		"account_id": accountID,
+		"queue_url":  sqsARN,
+	}).Info("Approval notification sent successfully")
 
 	return nil
 }
 
 func getAwsAccounts() (*AwsAccounts, error) {
+	log := logger.GetDefaultLogger()
+
+	log.LogAWSOperation("get_aws_accounts", logger.Fields{"action": "retrieving_from_secrets_manager"}).Debug("Retrieving AWS accounts from Secrets Manager")
+
 	awsAccountsSecret := os.Getenv("AWS_ACCOUNTS_SECRET")
 	if awsAccountsSecret == "" {
+		log.LogAWSOperation("get_aws_accounts", logger.Fields{"error": "missing_secret_name"}).Error("AWS_ACCOUNTS_SECRET environment variable is not set")
 		return nil, fmt.Errorf("AWS_ACCOUNTS_SECRET environment variable is not set")
 	}
 
@@ -150,6 +189,7 @@ func getAwsAccounts() (*AwsAccounts, error) {
 		Region: aws.String(region),
 	})
 	if err != nil {
+		log.LogAWSOperation("get_aws_accounts", logger.Fields{"region": region}).WithError(err).Error("Failed to create AWS session")
 		return nil, fmt.Errorf("failed to create AWS session: %v", err)
 	}
 
@@ -164,13 +204,20 @@ func getAwsAccounts() (*AwsAccounts, error) {
 
 	secretValue, err := secret.GetSecretString(awsAccountsSecret)
 	if err != nil {
+		log.LogAWSOperation("get_aws_accounts", logger.Fields{"secret_name": awsAccountsSecret}).WithError(err).Error("Failed to retrieve secret")
 		return nil, fmt.Errorf("failed to retrieve secret: %v", err)
 	}
 
 	var awsAccounts AwsAccounts
 	if err := json.Unmarshal([]byte(secretValue), &awsAccounts); err != nil {
+		log.LogAWSOperation("get_aws_accounts", logger.Fields{"secret_name": awsAccountsSecret}).WithError(err).Error("Failed to parse secret JSON")
 		return nil, fmt.Errorf("failed to parse secret JSON: %v", err)
 	}
+
+	log.LogAWSOperation("get_aws_accounts", logger.Fields{
+		"secret_name":    awsAccountsSecret,
+		"accounts_count": len(awsAccounts.Accounts),
+	}).Info("AWS accounts retrieved successfully")
 
 	return &awsAccounts, nil
 }

@@ -2,7 +2,6 @@ package slack
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/slack-go/slack/socketmode"
 
 	awspkg "github.com/serenityzn/awspim/pkg/aws"
+	"github.com/serenityzn/awspim/pkg/logger"
 )
 
 type handler struct {
@@ -61,19 +61,23 @@ func (sc *SlackClient) SendMessageToUser(userID, message string) error {
 
 // StartSlackBot starts the Socket Mode bot for slash commands (optional)
 func StartSlackBot() error {
+	log := logger.GetDefaultLogger()
+	
+	log.LogSlackOperation("start_bot", logger.Fields{"action": "initializing"}).Info("Starting Slack bot initialization")
+	
 	token := os.Getenv("SLACK_BOT_TOKEN")
 	appToken := os.Getenv("SLACK_APP_TOKEN")
 
 	if token == "" || appToken == "" {
+		log.LogSlackOperation("start_bot", logger.Fields{"error": "missing_tokens"}).Error("SLACK_BOT_TOKEN and SLACK_APP_TOKEN environment variables must be set")
 		return fmt.Errorf("SLACK_BOT_TOKEN and SLACK_APP_TOKEN environment variables must be set")
 	}
 
-	client := slack.New(token, slack.OptionDebug(true), slack.OptionAppLevelToken(appToken))
+	client := slack.New(token, slack.OptionDebug(false), slack.OptionAppLevelToken(appToken))
 
 	socketClient := socketmode.New(
 		client,
-		socketmode.OptionDebug(true),
-		socketmode.OptionLog(log.New(os.Stdout, "socketmode: ", log.Lshortfile|log.LstdFlags)),
+		socketmode.OptionDebug(false),
 	)
 
 	// Create handler
@@ -84,23 +88,23 @@ func StartSlackBot() error {
 		for evt := range socketClient.Events {
 			switch evt.Type {
 			case socketmode.EventTypeConnecting:
-				log.Println("Connecting to Slack with Socket Mode...")
+				log.LogSlackOperation("socket_connection", logger.Fields{"status": "connecting"}).Info("Connecting to Slack with Socket Mode")
 			case socketmode.EventTypeConnectionError:
-				log.Println("Connection failed. Retrying later...")
+				log.LogSlackOperation("socket_connection", logger.Fields{"status": "error"}).Warn("Connection failed. Retrying later")
 			case socketmode.EventTypeConnected:
-				log.Println("Connected to Slack with Socket Mode.")
+				log.LogSlackOperation("socket_connection", logger.Fields{"status": "connected"}).Info("Connected to Slack with Socket Mode")
 			case socketmode.EventTypeSlashCommand:
 				if err := handler.HandleCommand(&evt, socketClient); err != nil {
-					log.Printf("Error handling command: %v", err)
+					log.LogSlackOperation("handle_command", logger.Fields{"event_type": "slash_command"}).WithError(err).Error("Error handling slash command")
 				}
 			case socketmode.EventTypeInteractive:
 				if err := handler.HandleInteraction(&evt, socketClient); err != nil {
-					log.Printf("Error handling interaction: %v", err)
+					log.LogSlackOperation("handle_interaction", logger.Fields{"event_type": "interactive"}).WithError(err).Error("Error handling interaction")
 				}
 			case socketmode.EventTypeEventsAPI:
 				eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
 				if !ok {
-					log.Printf("Could not type cast the event to the EventsAPIEvent: %v\n", evt)
+					log.LogSlackOperation("events_api", logger.Fields{"error": "type_cast_failed"}).Warn("Could not type cast the event to the EventsAPIEvent")
 					continue
 				}
 				socketClient.Ack(*evt.Request, eventsAPIEvent)
@@ -108,7 +112,7 @@ func StartSlackBot() error {
 		}
 	}()
 
-	log.Println("Starting Slack bot...")
+	log.LogSlackOperation("start_bot", logger.Fields{"status": "running"}).Info("Slack bot started successfully")
 	socketClient.Run()
 	return nil
 }
@@ -120,16 +124,24 @@ func NewHandler(client *slack.Client) Handler {
 }
 
 func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client) error {
+	log := logger.GetDefaultLogger()
+	
 	switch evt.Type {
 	case socketmode.EventTypeSlashCommand:
 		cmd, ok := evt.Data.(slack.SlashCommand)
 		if !ok {
-			log.Printf("Could not type cast the event to a SlashCommand: %v\n", evt)
+			log.LogSlackOperation("handle_command", logger.Fields{"error": "type_cast_failed"}).Error("Could not type cast the event to a SlashCommand")
 			return fmt.Errorf("could not type cast event to SlashCommand")
 		}
 
 		// Handle /pim command
 		if cmd.Command == "/pim" {
+			log.LogUserAction(cmd.UserID, "pim_command", logger.Fields{
+				"command": cmd.Command,
+				"text": cmd.Text,
+				"channel_id": cmd.ChannelID,
+			}).Info("Processing /pim command")
+			
 			// Acknowledge the command immediately
 			client.Ack(*evt.Request)
 
@@ -138,15 +150,25 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				ChannelID: cmd.ChannelID,
 			})
 			if err != nil {
-				log.Printf("Failed to get channel info: %v", err)
+				log.LogSlackOperation("get_channel_info", logger.Fields{
+					"channel_id": cmd.ChannelID,
+					"user_id": cmd.UserID,
+				}).WithError(err).Error("Failed to get channel info")
 				h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText("Error: Could not verify channel information.", false))
 				return err
 			}
 
 			if channelInfo.Name != "pim-management" {
+				log.LogSecurityEvent("unauthorized_channel_usage", logger.Fields{
+					"user_id": cmd.UserID,
+					"channel_name": channelInfo.Name,
+					"channel_id": cmd.ChannelID,
+					"command": cmd.Command,
+				}).Warn("User attempted to use /pim command in unauthorized channel")
+				
 				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText("This command can only be used in the #pim-management channel.", false))
 				if err != nil {
-					log.Printf("Failed to send error message: %v", err)
+					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send error message")
 					return err
 				}
 				return nil
@@ -159,6 +181,11 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			if parameter != "" {
 				// Check if the parameter is a valid AWS account ID
 				if awspkg.ValidateAccountId(parameter) {
+					log.LogUserAction(cmd.UserID, "valid_account_request", logger.Fields{
+						"account_id": parameter,
+						"channel_id": cmd.ChannelID,
+					}).Info("User requested access to valid AWS account")
+					
 					accountName := awspkg.GetAccountName(parameter)
 					// Generate admin access request message with approval button
 					userName := cmd.UserName
@@ -193,11 +220,21 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 						),
 					)
 					if err != nil {
-						log.Printf("Failed to send message with buttons: %v", err)
+						log.LogSlackOperation("send_approval_request", logger.Fields{
+							"channel_id": cmd.ChannelID,
+							"user_id": cmd.UserID,
+							"account_id": parameter,
+						}).WithError(err).Error("Failed to send message with buttons")
 						return err
 					}
 					return nil // Return early since we've already sent the message
 				} else {
+					log.LogSecurityEvent("invalid_account_request", logger.Fields{
+						"user_id": cmd.UserID,
+						"invalid_account_id": parameter,
+						"channel_id": cmd.ChannelID,
+					}).Warn("User requested access to invalid AWS account")
+					
 					message = fmt.Sprintf("❌ **Invalid Account ID**\n\nAccount ID `%s` is not found in our system.\n\nUse `/acc` to see available accounts.", parameter)
 				}
 			} else {
@@ -206,13 +243,18 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 
 			_, _, err = h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
 			if err != nil {
-				log.Printf("Failed to send message: %v", err)
+				log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send message")
 				return err
 			}
 		}
 
 		// Handle /acc command
 		if cmd.Command == "/acc" {
+			log.LogUserAction(cmd.UserID, "acc_command", logger.Fields{
+				"command": cmd.Command,
+				"channel_id": cmd.ChannelID,
+			}).Info("Processing /acc command")
+			
 			// Acknowledge the command immediately
 			client.Ack(*evt.Request)
 
@@ -231,7 +273,10 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 
 			_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
 			if err != nil {
-				log.Printf("Failed to send message: %v", err)
+				log.LogSlackOperation("send_accounts_list", logger.Fields{
+					"channel_id": cmd.ChannelID,
+					"user_id": cmd.UserID,
+				}).WithError(err).Error("Failed to send accounts list message")
 				return err
 			}
 		}
@@ -240,9 +285,11 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 }
 
 func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Client) error {
+	log := logger.GetDefaultLogger()
+	
 	interaction, ok := evt.Data.(slack.InteractionCallback)
 	if !ok {
-		log.Printf("Could not type cast the event to InteractionCallback: %v\n", evt)
+		log.LogSlackOperation("handle_interaction", logger.Fields{"error": "type_cast_failed"}).Error("Could not type cast the event to InteractionCallback")
 		return fmt.Errorf("could not type cast event to InteractionCallback")
 	}
 
@@ -252,13 +299,23 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 	// Handle button clicks
 	if interaction.Type == slack.InteractionTypeBlockActions {
 		for _, action := range interaction.ActionCallback.BlockActions {
-			if action.ActionID == "approve_access" || action.ActionID == "deny_access" {
-				// Parse the button value: "userID:requestorUsername:accountID:accountName"
-				parts := strings.Split(action.Value, ":")
-				if len(parts) != 4 {
-					log.Printf("Invalid button value format: %s", action.Value)
-					continue
-				}
+				if action.ActionID == "approve_access" || action.ActionID == "deny_access" {
+					log.LogUserAction(interaction.User.ID, action.ActionID, logger.Fields{
+						"action_id": action.ActionID,
+						"button_value": action.Value,
+						"channel_id": interaction.Channel.ID,
+					}).Info("Processing approval/denial button click")
+					
+					// Parse the button value: "userID:requestorUsername:accountID:accountName"
+					parts := strings.Split(action.Value, ":")
+					if len(parts) != 4 {
+						log.LogSlackOperation("parse_button_value", logger.Fields{
+							"button_value": action.Value,
+							"expected_parts": 4,
+							"actual_parts": len(parts),
+						}).Error("Invalid button value format")
+						continue
+					}
 				
 				requestedUserID := parts[0]
 				requestorUsername := parts[1]
@@ -270,55 +327,85 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 					approverUser = fmt.Sprintf("<@%s>", interaction.User.ID)
 				}
 
-				// Check if the user is trying to approve their own request
-				// Exception: 'volodymyr.l' is allowed to self-approve
-				if requestedUserID == approverUserID && approverUser != "volodymyr.l" {
-					// Send an ephemeral message (only visible to the user who clicked)
-					_, err := h.client.PostEphemeral(
-						interaction.Channel.ID,
-						approverUserID,
-						slack.MsgOptionText("❌ *Self-Approval Not Allowed*\n\nYou cannot approve or deny your own access request. Another user must handle this request.", false),
-					)
-					if err != nil {
-						log.Printf("Failed to send ephemeral message: %v", err)
+					// Check if the user is trying to approve their own request
+					// Exception: 'volodymyr.l' is allowed to self-approve
+					if requestedUserID == approverUserID && approverUser != "volodymyr.l" {
+						log.LogSecurityEvent("self_approval_attempt", logger.Fields{
+							"user_id": approverUserID,
+							"approver_user": approverUser,
+							"requested_user_id": requestedUserID,
+							"account_id": accountID,
+							"action": action.ActionID,
+						}).Warn("User attempted to self-approve access request")
+						
+						// Send an ephemeral message (only visible to the user who clicked)
+						_, err := h.client.PostEphemeral(
+							interaction.Channel.ID,
+							approverUserID,
+							slack.MsgOptionText("❌ *Self-Approval Not Allowed*\n\nYou cannot approve or deny your own access request. Another user must handle this request.", false),
+						)
+						if err != nil {
+							log.LogSlackOperation("send_ephemeral", logger.Fields{"channel_id": interaction.Channel.ID}).WithError(err).Error("Failed to send ephemeral message")
+						}
+						continue // Skip processing this action
 					}
-					continue // Skip processing this action
-				}
 
 				var responseText string
 				var responseColor string
 				
-				if action.ActionID == "approve_access" {
-					// Send SQS notification for approval using actual usernames
-					err := awspkg.SendApprovalNotification(requestorUsername, approverUser, accountID)
-					if err != nil {
-						log.Printf("Failed to send SQS approval notification: %v", err)
-						// Continue with Slack update even if SQS fails
-					}
+					if action.ActionID == "approve_access" {
+						log.LogUserAction(approverUserID, "approve_access", logger.Fields{
+							"requestor": requestorUsername,
+							"approver": approverUser,
+							"account_id": accountID,
+							"account_name": accountName,
+						}).Info("Access request approved")
+						
+						// Send SQS notification for approval using actual usernames
+						err := awspkg.SendApprovalNotification(requestorUsername, approverUser, accountID)
+						if err != nil {
+							log.LogSlackOperation("send_sqs_notification", logger.Fields{
+								"requestor": requestorUsername,
+								"approver": approverUser,
+								"account_id": accountID,
+							}).WithError(err).Error("Failed to send SQS approval notification")
+							// Continue with Slack update even if SQS fails
+						}
 					
 					responseText = fmt.Sprintf("✅ *Access Approved*\n\nAdmin access to account *%s* (%s) has been *APPROVED* by *%s*.\n\n🎯 Access granted to <@%s>.\n\n📨 Notification sent to management system.", 
 						accountID, accountName, approverUser, requestedUserID)
 					responseColor = "good"
-				} else {
-					responseText = fmt.Sprintf("❌ *Access Denied*\n\nAdmin access to account *%s* (%s) has been *DENIED* by *%s*.\n\n🚫 Access not granted to <@%s>.", 
-						accountID, accountName, approverUser, requestedUserID)
-					responseColor = "danger"
-				}
+					} else {
+						log.LogUserAction(approverUserID, "deny_access", logger.Fields{
+							"requestor": requestorUsername,
+							"approver": approverUser,
+							"account_id": accountID,
+							"account_name": accountName,
+						}).Info("Access request denied")
+						
+						responseText = fmt.Sprintf("❌ *Access Denied*\n\nAdmin access to account *%s* (%s) has been *DENIED* by *%s*.\n\n🚫 Access not granted to <@%s>.", 
+							accountID, accountName, approverUser, requestedUserID)
+						responseColor = "danger"
+					}
 
 				// Update the original message to show the approval/denial
-				_, _, _, err := h.client.UpdateMessage(
-					interaction.Channel.ID,
-					interaction.Message.Timestamp,
-					slack.MsgOptionText(responseText, false),
-					slack.MsgOptionAttachments(slack.Attachment{
-						Color: responseColor,
-						Text:  responseText,
-					}),
-				)
-				if err != nil {
-					log.Printf("Failed to update message: %v", err)
-					return err
-				}
+					_, _, _, err := h.client.UpdateMessage(
+						interaction.Channel.ID,
+						interaction.Message.Timestamp,
+						slack.MsgOptionText(responseText, false),
+						slack.MsgOptionAttachments(slack.Attachment{
+							Color: responseColor,
+							Text:  responseText,
+						}),
+					)
+					if err != nil {
+						log.LogSlackOperation("update_message", logger.Fields{
+							"channel_id": interaction.Channel.ID,
+							"message_timestamp": interaction.Message.Timestamp,
+							"action": action.ActionID,
+						}).WithError(err).Error("Failed to update message")
+						return err
+					}
 			}
 		}
 	}

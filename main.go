@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	awspkg "github.com/serenityzn/awspim/pkg/aws"
+	"github.com/serenityzn/awspim/pkg/logger"
 	slackpkg "github.com/serenityzn/awspim/pkg/slack"
 )
 
@@ -18,17 +18,24 @@ func (e MyEvent) checkAwsAccountId() bool {
 }
 
 func init() {
+	log := logger.GetDefaultLogger()
+	
 	err := awspkg.Initialize()
 	if err != nil {
-		fmt.Printf("Error initializing AWS package: %v\n", err)
+		log.WithError(err).Error("Failed to initialize AWS package")
 		// Don't exit for Lambda, just log the error
+	} else {
+		log.Info("AWS package initialized successfully")
 	}
 }
 
 func main() {
-	fmt.Println("Starting Slack bot for slash commands...")
+	log := logger.GetDefaultLogger()
+	
+	log.Info("Starting AWS PIM Slack bot for slash commands")
+	
 	err := slackpkg.StartSlackBot()
 	if err != nil {
-		fmt.Printf("Failed to start Slack bot: %v\n", err)
+		log.WithError(err).Fatal("Failed to start Slack bot")
 	}
 }
