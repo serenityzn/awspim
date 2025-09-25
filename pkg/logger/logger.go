@@ -20,20 +20,10 @@ var defaultLogger *Logger
 func NewLogger() *Logger {
 	log := logrus.New()
 	
-	// Set formatter based on environment
-	env := os.Getenv("ENVIRONMENT")
-	if env == "production" || env == "prod" {
-		// JSON formatter for production (better for log aggregation)
-		log.SetFormatter(&logrus.JSONFormatter{
-			TimestampFormat: "2006-01-02T15:04:05.000Z",
-		})
-	} else {
-		// Text formatter for development (human-readable)
-		log.SetFormatter(&logrus.TextFormatter{
-			TimestampFormat: "2006-01-02 15:04:05",
-			FullTimestamp:   true,
-		})
-	}
+	// Always use JSON formatter
+	log.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: "2006-01-02T15:04:05.000Z",
+	})
 
 	// Set log level from environment or default to Info
 	level := os.Getenv("LOG_LEVEL")

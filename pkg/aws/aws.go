@@ -98,7 +98,6 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 	}).Info("Sending approval notification")
 
 	sqsARN := os.Getenv("MANAGER_SQS_ARN")
-	fmt.Printf("sqsARN: %s\n", sqsARN)
 	if sqsARN == "" {
 		log.LogAWSOperation("send_approval_notification", logger.Fields{"error": "missing_sqs_arn"}).Error("MANAGER_SQS_ARN environment variable is not set")
 		return fmt.Errorf("MANAGER_SQS_ARN environment variable is not set")
