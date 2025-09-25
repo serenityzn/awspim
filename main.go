@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	
-	awspkg "github.com/serenityzn/awspim/pkg/aws"
 	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/logger"
 	slackpkg "github.com/serenityzn/awspim/pkg/slack"
@@ -17,8 +16,12 @@ type MyEvent struct {
 	RequestedTime       string `json:"requestedtime"`
 }
 
+// Note: MyEvent and checkAwsAccountId method appear to be unused legacy code
+// TODO: Remove if not needed for Lambda functionality
 func (e MyEvent) checkAwsAccountId() bool {
-	return awspkg.ValidateAccountId(e.AwsAccountId)
+	// This would need to import awspkg if used
+	// return awspkg.ValidateAccountId(e.AwsAccountId)
+	return false
 }
 
 func main() {
@@ -38,13 +41,6 @@ func run() error {
 	
 	log := logger.GetDefaultLogger()
 	log.Info("Configuration loaded successfully")
-	
-	// Initialize AWS package
-	if err := awspkg.Initialize(); err != nil {
-		log.WithError(err).Error("Failed to initialize AWS package")
-		return fmt.Errorf("failed to initialize AWS package: %w", err)
-	}
-	log.Info("AWS package initialized successfully")
 	
 	log.Info("Starting AWS PIM Slack bot for slash commands")
 	

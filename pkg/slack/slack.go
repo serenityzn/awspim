@@ -262,20 +262,26 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			// Acknowledge the command immediately
 			client.Ack(*evt.Request)
 
-			// Get all AWS accounts
-			accounts := awspkg.GetAccounts()
-			var message string
-			
-			if accounts != nil && len(accounts.Accounts) > 0 {
-				message = fmt.Sprintf("📋 Available AWS Accounts (%d total):\n\n", len(accounts.Accounts))
-				for i, account := range accounts.Accounts {
-					message += fmt.Sprintf("%d. **%s**\n   ID: `%s`\n\n", i+1, account.AccountName, account.AccountId)
-				}
-			} else {
-				message = "❌ No AWS accounts available or failed to load accounts."
+		// Get all AWS accounts
+		accounts, err := awspkg.GetAccounts()
+		var message string
+		
+		if err != nil {
+			log.LogSlackOperation("get_accounts", logger.Fields{
+				"user_id": cmd.UserID,
+				"channel_id": cmd.ChannelID,
+			}).WithError(err).Error("Failed to fetch AWS accounts")
+			message = "❌ Failed to load AWS accounts. Please try again later."
+		} else if accounts != nil && len(accounts.Accounts) > 0 {
+			message = fmt.Sprintf("📋 Available AWS Accounts (%d total):\n\n", len(accounts.Accounts))
+			for i, account := range accounts.Accounts {
+				message += fmt.Sprintf("%d. **%s**\n   ID: `%s`\n\n", i+1, account.AccountName, account.AccountId)
 			}
+		} else {
+			message = "❌ No AWS accounts configured."
+		}
 
-			_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+			_, _, err = h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
 			if err != nil {
 				log.LogSlackOperation("send_accounts_list", logger.Fields{
 					"channel_id": cmd.ChannelID,

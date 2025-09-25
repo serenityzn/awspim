@@ -31,41 +31,23 @@ type ApprovalMessage struct {
 	DateTime  string `json:"datetime"`
 }
 
-var globalAwsAccounts *AwsAccounts
-
-// Initialize loads AWS accounts from Secrets Manager and stores them globally
-func Initialize() error {
-	log := logger.GetDefaultLogger()
-
-	log.LogAWSOperation("initialize", logger.Fields{"action": "loading_accounts"}).Info("Initializing AWS accounts")
-
-	result, err := getAwsAccounts()
-	if err != nil {
-		log.LogAWSOperation("initialize", logger.Fields{"action": "loading_accounts"}).WithError(err).Error("Failed to retrieve AWS accounts")
-		return errors.NewAWSError("failed to retrieve AWS accounts", err)
-	}
-
-	globalAwsAccounts = result
-	log.LogAWSOperation("initialize", logger.Fields{
-		"action":         "loading_accounts",
-		"accounts_count": len(result.Accounts),
-	}).Info("AWS accounts loaded successfully")
-
-	return nil
+// GetAccounts fetches AWS accounts from Secrets Manager
+func GetAccounts() (*AwsAccounts, error) {
+	return getAwsAccounts()
 }
 
-// GetAccounts returns the globally loaded AWS accounts
-func GetAccounts() *AwsAccounts {
-	return globalAwsAccounts
-}
-
-// ValidateAccountId checks if the given account ID exists in the loaded accounts
+// ValidateAccountId checks if the given account ID exists in Secrets Manager
 func ValidateAccountId(accountId string) bool {
-	if globalAwsAccounts == nil {
+	accounts, err := getAwsAccounts()
+	if err != nil {
+		log := logger.GetDefaultLogger()
+		log.LogAWSOperation("validate_account_id", logger.Fields{
+			"account_id": accountId,
+		}).WithError(err).Error("Failed to fetch accounts for validation")
 		return false
 	}
 
-	for _, account := range globalAwsAccounts.Accounts {
+	for _, account := range accounts.Accounts {
 		if account.AccountId == accountId {
 			return true
 		}
@@ -75,11 +57,16 @@ func ValidateAccountId(accountId string) bool {
 
 // GetAccountName returns the account name for a given account ID
 func GetAccountName(accountId string) string {
-	if globalAwsAccounts == nil {
+	accounts, err := getAwsAccounts()
+	if err != nil {
+		log := logger.GetDefaultLogger()
+		log.LogAWSOperation("get_account_name", logger.Fields{
+			"account_id": accountId,
+		}).WithError(err).Error("Failed to fetch accounts for name lookup")
 		return ""
 	}
 
-	for _, account := range globalAwsAccounts.Accounts {
+	for _, account := range accounts.Accounts {
 		if account.AccountId == accountId {
 			return account.AccountName
 		}
