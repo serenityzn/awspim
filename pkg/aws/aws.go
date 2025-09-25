@@ -5,13 +5,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/service/sqs"
-	"github.com/aws/aws-secretsmanager-caching-go/secretcache"
 	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/errors"
 	"github.com/serenityzn/awspim/pkg/logger"
+	"github.com/serenityzn/awspim/pkg/utils"
 )
 
 type AwsAccount struct {
@@ -31,16 +29,29 @@ type ApprovalMessage struct {
 	DateTime  string `json:"datetime"`
 }
 
-// GetAccounts fetches AWS accounts from Secrets Manager
+// GetAccounts fetches AWS accounts using cached data for better performance
 func GetAccounts() (*AwsAccounts, error) {
-	return getAwsAccounts()
+	cache := GetAccountsCache()
+	return cache.GetAccounts()
 }
 
-// ValidateAccountId checks if the given account ID exists in Secrets Manager
+// ValidateAccountId checks if the given account ID exists and has valid format
 func ValidateAccountId(accountId string) bool {
-	accounts, err := getAwsAccounts()
+	log := logger.GetDefaultLogger()
+	
+	// First check format validation
+	if !utils.ValidateAWSAccountID(accountId) {
+		log.LogAWSOperation("validate_account_id", logger.Fields{
+			"account_id": utils.SanitizeUserInput(accountId),
+			"error": "invalid_format",
+		}).Warn("Account ID format validation failed")
+		return false
+	}
+	
+	// Then check if it exists in our system using cached data
+	cache := GetAccountsCache()
+	accounts, err := cache.GetAccounts()
 	if err != nil {
-		log := logger.GetDefaultLogger()
 		log.LogAWSOperation("validate_account_id", logger.Fields{
 			"account_id": accountId,
 		}).WithError(err).Error("Failed to fetch accounts for validation")
@@ -55,11 +66,14 @@ func ValidateAccountId(accountId string) bool {
 	return false
 }
 
-// GetAccountName returns the account name for a given account ID
+// GetAccountName returns the account name for a given account ID using cached data
 func GetAccountName(accountId string) string {
-	accounts, err := getAwsAccounts()
+	log := logger.GetDefaultLogger()
+	
+	// Use cached data for better performance
+	cache := GetAccountsCache()
+	accounts, err := cache.GetAccounts()
 	if err != nil {
-		log := logger.GetDefaultLogger()
 		log.LogAWSOperation("get_account_name", logger.Fields{
 			"account_id": accountId,
 		}).WithError(err).Error("Failed to fetch accounts for name lookup")
@@ -74,14 +88,14 @@ func GetAccountName(accountId string) string {
 	return ""
 }
 
-// SendApprovalNotification sends an approval message to the configured SQS queue
+// SendApprovalNotification sends an approval message to the configured SQS queue using optimized connections
 func SendApprovalNotification(requestor, approver, accountID string) error {
 	log := logger.GetDefaultLogger()
 	cfg := config.Get()
 
 	log.LogAWSOperation("send_approval_notification", logger.Fields{
-		"requestor":  requestor,
-		"approver":   approver,
+		"requestor":  utils.SanitizeUserInput(requestor),
+		"approver":   utils.SanitizeUserInput(approver),
 		"account_id": accountID,
 	}).Info("Sending approval notification")
 
@@ -91,20 +105,21 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 		return errors.NewConfigurationError("MANAGER_SQS_ARN not configured", nil).WithContext("operation", "send_approval_notification")
 	}
 
-	// Get AWS region from config
-	region := cfg.GetAWSRegion()
-
-	// Create AWS session
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region),
-	})
+	// Use session manager for optimized connections
+	sessionManager, err := GetSessionManager()
 	if err != nil {
-		log.LogAWSOperation("send_approval_notification", logger.Fields{"region": region}).WithError(err).Error("Failed to create AWS session")
-		return errors.NewAWSError("failed to create AWS session", err).WithContext("region", region)
+		return errors.NewAWSError("failed to get session manager", err)
 	}
 
-	// Create SQS service client
-	sqsClient := sqs.New(sess)
+	// Refresh session if needed
+	if err := sessionManager.RefreshIfNeeded(); err != nil {
+		log.LogAWSOperation("send_approval_notification", logger.Fields{
+			"warning": "session_refresh_failed",
+		}).WithError(err).Warn("Failed to refresh AWS session, continuing with existing session")
+	}
+
+	// Get reused SQS client
+	sqsClient := sessionManager.GetSQSClient()
 
 	// Create approval message
 	approvalMsg := ApprovalMessage{
@@ -144,62 +159,11 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 	}
 
 	log.LogAWSOperation("send_approval_notification", logger.Fields{
-		"requestor":  requestor,
-		"approver":   approver,
+		"requestor":  utils.SanitizeUserInput(requestor),
+		"approver":   utils.SanitizeUserInput(approver),
 		"account_id": accountID,
 		"queue_url":  sqsARN,
 	}).Info("Approval notification sent successfully")
 
 	return nil
-}
-
-func getAwsAccounts() (*AwsAccounts, error) {
-	log := logger.GetDefaultLogger()
-	cfg := config.Get()
-
-	log.LogAWSOperation("get_aws_accounts", logger.Fields{"action": "retrieving_from_secrets_manager"}).Debug("Retrieving AWS accounts from Secrets Manager")
-
-	awsAccountsSecret := cfg.GetAWSAccountsSecret()
-	if awsAccountsSecret == "" {
-		log.LogAWSOperation("get_aws_accounts", logger.Fields{"error": "missing_secret_name"}).Error("AWS_ACCOUNTS_SECRET not configured")
-		return nil, errors.NewConfigurationError("AWS_ACCOUNTS_SECRET not configured", nil)
-	}
-
-	region := cfg.GetAWSRegion()
-
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String(region),
-	})
-	if err != nil {
-		log.LogAWSOperation("get_aws_accounts", logger.Fields{"region": region}).WithError(err).Error("Failed to create AWS session")
-		return nil, errors.NewAWSError("failed to create AWS session", err).WithContext("region", region)
-	}
-
-	svc := secretsmanager.New(sess)
-
-	secret, err := secretcache.New(func(cache *secretcache.Cache) {
-		cache.Client = svc
-	})
-	if err != nil {
-		return nil, errors.NewAWSError("failed to create secret cache", err)
-	}
-
-	secretValue, err := secret.GetSecretString(awsAccountsSecret)
-	if err != nil {
-		log.LogAWSOperation("get_aws_accounts", logger.Fields{"secret_name": awsAccountsSecret}).WithError(err).Error("Failed to retrieve secret")
-		return nil, errors.NewAWSError("failed to retrieve secret", err).WithContext("secret_name", awsAccountsSecret)
-	}
-
-	var awsAccounts AwsAccounts
-	if err := json.Unmarshal([]byte(secretValue), &awsAccounts); err != nil {
-		log.LogAWSOperation("get_aws_accounts", logger.Fields{"secret_name": awsAccountsSecret}).WithError(err).Error("Failed to parse secret JSON")
-		return nil, errors.NewAWSError("failed to parse secret JSON", err).WithContext("secret_name", awsAccountsSecret)
-	}
-
-	log.LogAWSOperation("get_aws_accounts", logger.Fields{
-		"secret_name":    awsAccountsSecret,
-		"accounts_count": len(awsAccounts.Accounts),
-	}).Info("AWS accounts retrieved successfully")
-
-	return &awsAccounts, nil
 }

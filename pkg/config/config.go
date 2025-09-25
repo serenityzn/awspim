@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/spf13/viper"
 	"github.com/serenityzn/awspim/pkg/errors"
@@ -28,7 +29,10 @@ type Config struct {
 	AllowedChannel string   `mapstructure:"allowed_channel"`
 }
 
-var globalConfig *Config
+var (
+    globalConfig *Config
+    configMutex  sync.RWMutex // Mutex for protecting globalConfig
+)
 
 // Load loads configuration from config file first, then environment variables
 func Load() (*Config, error) {
@@ -80,13 +84,22 @@ func Load() (*Config, error) {
 	}
 	
 	// Store globally
+    configMutex.Lock()
 	globalConfig = &config
+    configMutex.Unlock()
 	
 	return &config, nil
 }
 
-// Get returns the global config instance
+// Get returns the globally loaded configuration
 func Get() *Config {
+    configMutex.RLock()
+    defer configMutex.RUnlock()
+	if globalConfig == nil {
+		// This should ideally not happen if Load() is called at startup
+		// but provides a fallback for safety.
+		panic("configuration not loaded. Call config.Load() first.")
+	}
 	return globalConfig
 }
 

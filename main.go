@@ -9,20 +9,6 @@ import (
 	slackpkg "github.com/serenityzn/awspim/pkg/slack"
 )
 
-type MyEvent struct {
-	UserId              string `json:"userid"`
-	AwsAccountId        string `json:"awsaccountid"`
-	PermissionsBoundary string `json:"permissionsboundary"`
-	RequestedTime       string `json:"requestedtime"`
-}
-
-// Note: MyEvent and checkAwsAccountId method appear to be unused legacy code
-// TODO: Remove if not needed for Lambda functionality
-func (e MyEvent) checkAwsAccountId() bool {
-	// This would need to import awspkg if used
-	// return awspkg.ValidateAccountId(e.AwsAccountId)
-	return false
-}
 
 func main() {
 	if err := run(); err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/errors"
 	"github.com/serenityzn/awspim/pkg/logger"
+	"github.com/serenityzn/awspim/pkg/utils"
 )
 
 type handler struct {
@@ -67,6 +68,10 @@ func StartSlackBot() error {
 	cfg := config.Get()
 
 	log.LogSlackOperation("start_bot", logger.Fields{"action": "initializing"}).Info("Starting Slack bot initialization")
+
+	// Start rate limiter periodic cleanup
+	rateLimiter := GetRateLimiter()
+	rateLimiter.StartPeriodicCleanup()
 
 	token := cfg.GetSlackBotToken()
 	appToken := cfg.GetSlackAppToken()
@@ -136,6 +141,28 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 		if !ok {
 			log.LogSlackOperation("handle_command", logger.Fields{"error": "type_cast_failed"}).Error("Could not type cast the event to a SlashCommand")
 			return errors.NewSlackError("could not type cast event to SlashCommand", nil)
+		}
+
+		// Check rate limiting
+		rateLimiter := GetRateLimiter()
+		if !rateLimiter.IsAllowed(cmd.UserID) {
+			log.LogSecurityEvent("rate_limited_command", logger.Fields{
+				"user_id": cmd.UserID,
+				"command": cmd.Command,
+				"channel_id": cmd.ChannelID,
+			}).Warn("Command blocked due to rate limiting")
+
+			// Acknowledge the command but send rate limit message
+			client.Ack(*evt.Request)
+			_, err := h.client.PostEphemeral(cmd.ChannelID, cmd.UserID, 
+				slack.MsgOptionText("⚠️ **Rate Limited**\n\nYou're sending commands too quickly. Please wait before trying again.", false))
+			if err != nil {
+				log.LogSlackOperation("send_rate_limit_message", logger.Fields{
+					"channel_id": cmd.ChannelID,
+					"user_id": cmd.UserID,
+				}).WithError(err).Error("Failed to send rate limit message")
+			}
+			return nil
 		}
 
 		// Handle /pim command
@@ -235,11 +262,11 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				} else {
 					log.LogSecurityEvent("invalid_account_request", logger.Fields{
 						"user_id": cmd.UserID,
-						"invalid_account_id": parameter,
+						"invalid_account_id": utils.SanitizeUserInput(parameter),
 						"channel_id": cmd.ChannelID,
 					}).Warn("User requested access to invalid AWS account")
 					
-					message = fmt.Sprintf("❌ **Invalid Account ID**\n\nAccount ID `%s` is not found in our system.\n\nUse `/acc` to see available accounts.", parameter)
+					message = fmt.Sprintf("❌ **Invalid Account ID**\n\nAccount ID `%s` is not found in our system.\n\nUse `/acc` to see available accounts.", utils.SanitizeUserInput(parameter))
 				}
 			} else {
 				message = "❌ **Missing Account ID**\n\nPlease provide an AWS Account ID.\n\nUsage: `/pim [account-id]`\nExample: `/pim 904924507160`\n\nUse `/acc` to see available accounts."

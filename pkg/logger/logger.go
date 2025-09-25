@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/sirupsen/logrus"
+	"github.com/serenityzn/awspim/pkg/config"
 )
 
 // Logger wraps logrus.Logger with application-specific methods
@@ -25,8 +26,9 @@ func NewLogger() *Logger {
 		TimestampFormat: "2006-01-02T15:04:05.000Z",
 	})
 
-	// Set log level from environment or default to Info
-	level := os.Getenv("LOG_LEVEL")
+	// Set log level from config or default to Info
+	cfg := config.Get()
+	level := cfg.GetLogLevel()
 	switch level {
 	case "debug":
 		log.SetLevel(logrus.DebugLevel)
