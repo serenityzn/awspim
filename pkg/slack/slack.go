@@ -10,6 +10,7 @@ import (
 
 	awspkg "github.com/serenityzn/awspim/pkg/aws"
 	"github.com/serenityzn/awspim/pkg/config"
+	"github.com/serenityzn/awspim/pkg/errors"
 	"github.com/serenityzn/awspim/pkg/logger"
 )
 
@@ -32,7 +33,7 @@ func NewSlackClient() (*SlackClient, error) {
 	cfg := config.Get()
 	token := cfg.GetSlackBotToken()
 	if token == "" {
-		return nil, fmt.Errorf("SLACK_BOT_TOKEN not configured")
+		return nil, errors.NewConfigurationError("SLACK_BOT_TOKEN not configured", nil)
 	}
 
 	client := slack.New(token, slack.OptionDebug(false))
@@ -72,7 +73,7 @@ func StartSlackBot() error {
 
 	if token == "" || appToken == "" {
 		log.LogSlackOperation("start_bot", logger.Fields{"error": "missing_tokens"}).Error("SLACK_BOT_TOKEN and SLACK_APP_TOKEN not configured")
-		return fmt.Errorf("SLACK_BOT_TOKEN and SLACK_APP_TOKEN not configured")
+		return errors.NewConfigurationError("SLACK_BOT_TOKEN and SLACK_APP_TOKEN not configured", nil)
 	}
 
 	client := slack.New(token, slack.OptionDebug(false), slack.OptionAppLevelToken(appToken))
@@ -134,7 +135,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 		cmd, ok := evt.Data.(slack.SlashCommand)
 		if !ok {
 			log.LogSlackOperation("handle_command", logger.Fields{"error": "type_cast_failed"}).Error("Could not type cast the event to a SlashCommand")
-			return fmt.Errorf("could not type cast event to SlashCommand")
+			return errors.NewSlackError("could not type cast event to SlashCommand", nil)
 		}
 
 		// Handle /pim command
@@ -294,7 +295,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 	interaction, ok := evt.Data.(slack.InteractionCallback)
 	if !ok {
 		log.LogSlackOperation("handle_interaction", logger.Fields{"error": "type_cast_failed"}).Error("Could not type cast the event to InteractionCallback")
-		return fmt.Errorf("could not type cast event to InteractionCallback")
+		return errors.NewSlackError("could not type cast event to InteractionCallback", nil)
 	}
 
 	// Acknowledge the interaction

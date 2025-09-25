@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"github.com/serenityzn/awspim/pkg/errors"
 )
 
 // Config holds all configuration values for the application
@@ -62,7 +63,7 @@ func Load() (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			// Config file was found but another error was produced
-			return nil, fmt.Errorf("error reading config file: %w", err)
+			return nil, errors.NewConfigurationError("failed to read config file", err)
 		}
 		// Config file not found; proceed with environment variables and defaults
 	}
@@ -70,12 +71,12 @@ func Load() (*Config, error) {
 	// Unmarshal config
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+		return nil, errors.NewConfigurationError("failed to unmarshal config", err)
 	}
 	
 	// Validate required fields
 	if err := validateConfig(&config); err != nil {
-		return nil, fmt.Errorf("config validation failed: %w", err)
+		return nil, err // validateConfig already returns AppError
 	}
 	
 	// Store globally
@@ -122,7 +123,10 @@ func validateConfig(config *Config) error {
 	}
 	
 	if len(missing) > 0 {
-		return fmt.Errorf("missing required configuration: %s", strings.Join(missing, ", "))
+		return errors.NewValidationError(
+			fmt.Sprintf("missing required configuration: %s", strings.Join(missing, ", ")),
+			nil,
+		).WithContext("missing_fields", missing)
 	}
 	
 	return nil

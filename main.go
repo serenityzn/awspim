@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	
 	awspkg "github.com/serenityzn/awspim/pkg/aws"
 	"github.com/serenityzn/awspim/pkg/config"
@@ -20,33 +21,38 @@ func (e MyEvent) checkAwsAccountId() bool {
 	return awspkg.ValidateAccountId(e.AwsAccountId)
 }
 
-func init() {
+func main() {
+	if err := run(); err != nil {
+		// Use fmt.Fprintf to stderr since logger might not be initialized
+		fmt.Fprintf(os.Stderr, "Application failed to start: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Load configuration first
 	_, err := config.Load()
 	if err != nil {
-		// Can't use logger yet as it might depend on config
-		panic(fmt.Sprintf("Failed to load configuration: %v", err))
+		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 	
 	log := logger.GetDefaultLogger()
 	log.Info("Configuration loaded successfully")
 	
-	err = awspkg.Initialize()
-	if err != nil {
+	// Initialize AWS package
+	if err := awspkg.Initialize(); err != nil {
 		log.WithError(err).Error("Failed to initialize AWS package")
-		// Don't exit for Lambda, just log the error
-	} else {
-		log.Info("AWS package initialized successfully")
+		return fmt.Errorf("failed to initialize AWS package: %w", err)
 	}
-}
-
-func main() {
-	log := logger.GetDefaultLogger()
+	log.Info("AWS package initialized successfully")
 	
 	log.Info("Starting AWS PIM Slack bot for slash commands")
 	
-	err := slackpkg.StartSlackBot()
-	if err != nil {
-		log.WithError(err).Fatal("Failed to start Slack bot")
+	// Start Slack bot
+	if err := slackpkg.StartSlackBot(); err != nil {
+		log.WithError(err).Error("Failed to start Slack bot")
+		return fmt.Errorf("failed to start Slack bot: %w", err)
 	}
+	
+	return nil
 }
