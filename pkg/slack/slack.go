@@ -563,9 +563,31 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			accountID, _ := approvalData["account_id"].(string)
 			accountName, _ := approvalData["account_name"].(string)
 			approverUsername, _ := approvalData["approver_username"].(string)
+			channelID, _ := approvalData["channel_id"].(string)
+			messageTimestamp, _ := approvalData["message_timestamp"].(string)
 
 			// Process the approval
 			err = h.processApproval(requestedUserID, requestorUsername, accountID, accountName, cmd.UserID, approverUsername)
+
+			// Update original message to remove buttons after successful approval
+			if channelID != "" && messageTimestamp != "" {
+				originalBlocks := []slack.Block{
+					slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", 
+					fmt.Sprintf("✅ **Access Approved**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** %s\n\n_This request has been processed._",
+						utils.SanitizeUserInput(accountName),
+						utils.SanitizeUserInput(accountID),
+						utils.SanitizeUserInput(requestorUsername),
+						utils.SanitizeUserInput(approverUsername)), false, false), nil, nil),
+				}
+				_, _, _, updateErr := h.client.UpdateMessage(channelID, messageTimestamp, slack.MsgOptionBlocks(originalBlocks...))
+				if updateErr != nil {
+					log.LogSlackOperation("update_approval_message", logger.Fields{
+						"channel_id": channelID,
+						"message_timestamp": messageTimestamp,
+					}).WithError(updateErr).Error("Failed to update original approval message")
+				}
+			}
 			if err != nil {
 				log.LogSlackOperation("process_approval_after_mfa", logger.Fields{
 					"account_id": accountID,
@@ -721,7 +743,6 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 					}
 
 				var responseText string
-				var responseColor string
 				
 					if action.ActionID == "approve_access" {
 						// Create unique approval ID to prevent duplicate processing
@@ -771,6 +792,8 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 									"account_name": accountName,     // Used in email template
 									"approver_user_id": approverUserID,
 									"approver_username": approverUser,
+									"channel_id": interaction.Channel.ID,
+									"message_timestamp": interaction.Message.Timestamp,
 								}
 								
 								_, err := h.authenticator.InitiateApproval(approverUserID, approvalDataMap)
@@ -786,8 +809,8 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 									return nil
 								}
 								
-								// Store approval data for the modal button
-								approvalData := fmt.Sprintf("%s:%s:%s:%s", requestedUserID, requestorUsername, accountID, accountName)
+								// Store approval data for the modal button (now includes channel and message timestamp)
+								approvalData := fmt.Sprintf("%s:%s:%s:%s:%s:%s", requestedUserID, requestorUsername, accountID, accountName, interaction.Channel.ID, interaction.Message.Timestamp)
 								
 								// For button interactions, we need to use a different approach
 								// The most reliable method is to acknowledge with a response that triggers a modal
@@ -873,7 +896,6 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 					
 					responseText = fmt.Sprintf("✅ *Access Approved*\n\nAdmin access to account *%s* (%s) has been *APPROVED* by *%s*.\n\n🎯 Access granted to <@%s>.\n\n📨 Notification sent to management system.", 
 						accountID, accountName, approverUser, requestedUserID)
-					responseColor = "good"
 					} else if action.ActionID == "deny_access" {
 						// Create unique approval ID to prevent duplicate processing
 						approvalID := fmt.Sprintf("%s:%s:%s:%s", requestedUserID, accountID, approverUserID, interaction.Message.Timestamp)
@@ -919,22 +941,28 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 						
 						responseText = fmt.Sprintf("❌ *Access Denied*\n\nAdmin access to account *%s* (%s) has been *DENIED* by *%s*.\n\n🚫 Access not granted to <@%s>.", 
 							accountID, accountName, approverUser, requestedUserID)
-						responseColor = "danger"
 					}
 
 				// Acknowledge the interaction
 				client.Ack(*evt.Request)
 				
-				// Update the original message to show the approval/denial with disabled buttons
-					_, _, _, err := h.client.UpdateMessage(
-						interaction.Channel.ID,
-						interaction.Message.Timestamp,
-						slack.MsgOptionText(responseText, false),
-						slack.MsgOptionAttachments(slack.Attachment{
-							Color: responseColor,
-							Text:  responseText,
-						}),
-					)
+				// Update the original message to show the approval/denial with NO buttons (completed state)
+				finalBlocks := []slack.Block{
+					slack.NewSectionBlock(
+						slack.NewTextBlockObject("mrkdwn", responseText, false, false),
+						nil, nil,
+					),
+					slack.NewSectionBlock(
+						slack.NewTextBlockObject("mrkdwn", "_This request has been processed and is no longer available for action._", false, false),
+						nil, nil,
+					),
+				}
+				
+				_, _, _, err := h.client.UpdateMessage(
+					interaction.Channel.ID,
+					interaction.Message.Timestamp,
+					slack.MsgOptionBlocks(finalBlocks...),
+				)
 					if err != nil {
 						log.LogSlackOperation("update_message", logger.Fields{
 							"channel_id": interaction.Channel.ID,
@@ -1089,13 +1117,13 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 		}
 	}
 
-	// Get approval context from private metadata (we'll set this when creating the modal)
+	// Get approval context from private metadata (now includes channel and message timestamp)
 	approvalData := interaction.View.PrivateMetadata
 	parts := strings.Split(approvalData, ":")
-	if len(parts) != 4 {
+	if len(parts) != 6 {
 		log.LogSlackOperation("parse_approval_data", logger.Fields{
 			"approval_data": approvalData,
-			"expected_parts": 4,
+			"expected_parts": 6,
 			"actual_parts": len(parts),
 		}).Error("Invalid approval data format")
 		return nil
@@ -1105,6 +1133,8 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 	requestorUsername := parts[1]
 	accountID := parts[2]
 	accountName := parts[3]
+	channelID := parts[4]
+	messageTimestamp := parts[5]
 	approverUserID := interaction.User.ID
 
 	// Verify the approval using MFA
@@ -1127,8 +1157,60 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 		return nil
 	}
 
-	// Process the approval (similar to existing approval logic)
-	return h.processApproval(requestedUserID, requestorUsername, accountID, accountName, approverUserID, interaction.User.Name)
+	// Update original message to remove buttons after successful MFA approval
+	if channelID != "" && messageTimestamp != "" {
+		originalBlocks := []slack.Block{
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", 
+					fmt.Sprintf("✅ **Access Approved**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** %s\n\n_This request has been processed._",
+						utils.SanitizeUserInput(accountName),
+						utils.SanitizeUserInput(accountID),
+						utils.SanitizeUserInput(requestorUsername),
+						utils.SanitizeUserInput(interaction.User.Name)), false, false), nil, nil),
+		}
+		_, _, _, updateErr := h.client.UpdateMessage(channelID, messageTimestamp, slack.MsgOptionBlocks(originalBlocks...))
+		if updateErr != nil {
+			log.LogSlackOperation("update_approval_message", logger.Fields{
+				"channel_id": channelID,
+				"message_timestamp": messageTimestamp,
+			}).WithError(updateErr).Error("Failed to update original approval message after MFA")
+		}
+	}
+	
+	// Process the approval
+	err = h.processApproval(requestedUserID, requestorUsername, accountID, accountName, approverUserID, interaction.User.Name)
+	if err != nil {
+		return err
+	}
+
+	// Update the original approval message to remove buttons (mark as completed)
+	if channelID != "" && messageTimestamp != "" {
+		completedText := fmt.Sprintf("✅ **Access Approved via Multi-Factor Authentication**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** <@%s>\n\n🔐 Verified with Email + TOTP codes\n📨 Management notification sent", 
+			utils.SanitizeUserInput(accountName),
+			utils.SanitizeUserInput(accountID),
+			utils.SanitizeUserInput(requestorUsername),
+			approverUserID)
+		
+		_, _, _, updateErr := h.client.UpdateMessage(
+			channelID,
+			messageTimestamp,
+			slack.MsgOptionText(completedText, false),
+			// No buttons - message is now completed
+		)
+		if updateErr != nil {
+			log.LogSlackOperation("update_original_message_after_mfa", logger.Fields{
+				"channel_id": channelID,
+				"message_timestamp": messageTimestamp,
+			}).WithError(updateErr).Error("Failed to update original approval message after MFA completion")
+		} else {
+			log.LogSlackOperation("update_original_message_after_mfa", logger.Fields{
+				"channel_id": channelID,
+				"message_timestamp": messageTimestamp,
+			}).Info("Successfully updated original approval message to completed state")
+		}
+	}
+
+	return nil
 }
 
 // processApproval handles the actual approval logic (extracted from existing code)
@@ -1196,14 +1278,14 @@ func (h *handler) startApprovalCleanup() {
 func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction slack.InteractionCallback, client *socketmode.Client, evt *socketmode.Event) error {
 	log := logger.GetDefaultLogger()
 	
-	// Parse approval data from button value
+	// Parse approval data from button value (now includes channel and message timestamp)
 	approvalData := action.Value
 	parts := strings.Split(approvalData, ":")
-	if len(parts) != 4 {
+	if len(parts) != 6 {
 		client.Ack(*evt.Request)
 		log.LogSlackOperation("parse_mfa_modal_data", logger.Fields{
 			"approval_data": approvalData,
-			"expected_parts": 4,
+			"expected_parts": 6,
 			"actual_parts": len(parts),
 		}).Error("Invalid MFA modal approval data format")
 		return nil
@@ -1213,6 +1295,7 @@ func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction s
 	requestorUsername := parts[1]
 	accountID := parts[2]
 	accountName := parts[3]
+	// parts[4] is channelID and parts[5] is messageTimestamp - will be used in modal metadata
 	
 	// Create the modal
 	modalView := slack.ModalViewRequest{
@@ -1277,7 +1360,7 @@ func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction s
 			Text: "Cancel",
 		},
 		CallbackID:      "verify_approval",
-		PrivateMetadata: approvalData,
+		PrivateMetadata: approvalData, // Now includes all 6 parts: userID:username:accountID:accountName:channelID:messageTimestamp
 		ClearOnClose:    true,
 		NotifyOnClose:   false,
 	}

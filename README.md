@@ -24,9 +24,10 @@ A Slack bot for managing AWS Privileged Identity Management (PIM) access request
 ## 📋 Features
 
 - **Slack Integration**: Slash commands for requesting AWS access
-- **Approval Workflow**: Interactive buttons for approve/deny decisions
-- **AWS Integration**: SQS notifications and Secrets Manager for account data
-- **Security**: Channel restrictions and admin user management
+- **Multi-Factor Authentication**: TOTP + Email verification for enhanced security
+- **Approval Workflow**: Interactive buttons and modal windows for approve/deny decisions
+- **AWS Integration**: SQS notifications, SES email delivery, and Secrets Manager for account data
+- **Security**: Channel restrictions, admin user management, and duplicate approval prevention
 - **Logging**: Structured JSON logging for monitoring and debugging
 
 ## 🔧 Configuration
@@ -61,6 +62,11 @@ log_level: "info"
 allowed_channel: "pim-management"
 admin_users:
   - "volodymyr.l"
+
+# Multi-Factor Authentication (MFA)
+require_multi_factor_auth: true
+ses_from_email: "noreply@yourdomain.com"
+email_template_name: "PIM-MFA-Template"
 ```
 
 ### Environment Variable Mapping
@@ -71,6 +77,9 @@ admin_users:
 | `manager_sqs_arn` | `MANAGER_SQS_ARN` or `AWSPIM_MANAGER_SQS_ARN` |
 | `aws_region` | `AWS_REGION` or `AWSPIM_AWS_REGION` |
 | `aws_accounts_secret` | `AWS_ACCOUNTS_SECRET` or `AWSPIM_AWS_ACCOUNTS_SECRET` |
+| `require_multi_factor_auth` | `REQUIRE_MULTI_FACTOR_AUTH` or `AWSPIM_REQUIRE_MULTI_FACTOR_AUTH` |
+| `ses_from_email` | `SES_FROM_EMAIL` or `AWSPIM_SES_FROM_EMAIL` |
+| `email_template_name` | `EMAIL_TEMPLATE_NAME` or `AWSPIM_EMAIL_TEMPLATE_NAME` |
 
 ## 🔐 AWS Setup
 
@@ -102,10 +111,83 @@ Create an SQS queue for approval notifications. The application will send messag
 }
 ```
 
-### 3. IAM Permissions
+### 3. SES Email Template (for MFA)
+Create an SES email template for multi-factor authentication:
+
+**Template Name**: `PIM-MFA-Template` (or as configured)
+
+**Subject**: `AWS PIM - Multi-Factor Authentication Required`
+
+**HTML Body**:
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AWS PIM - Multi-Factor Authentication</title>
+</head>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+        <h1 style="color: #333; margin: 0; font-size: 24px;">🔐 AWS PIM - Multi-Factor Authentication</h1>
+    </div>
+    
+    <div style="background-color: #fff; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px;">
+        <h2 style="color: #495057; margin-top: 0;">Approval Verification Required</h2>
+        
+        <p>Hello,</p>
+        
+        <p>You are attempting to approve an AWS access request. Please use the verification code below:</p>
+        
+        <div style="background-color: #e9ecef; padding: 15px; border-radius: 4px; text-align: center; margin: 20px 0;">
+            <strong style="font-size: 24px; color: #495057; letter-spacing: 2px;">{{code}}</strong>
+        </div>
+        
+        <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; margin: 20px 0;">
+            <h3 style="margin: 0 0 10px 0; color: #495057;">Request Details:</h3>
+            <p style="margin: 5px 0;"><strong>Requestor:</strong> {{requestor}}</p>
+            <p style="margin: 5px 0;"><strong>Account:</strong> {{account_name}} ({{account_id}})</p>
+        </div>
+        
+        <p><strong>Important:</strong> This code expires in 10 minutes. If you did not initiate this request, please ignore this email.</p>
+        
+        <p>Enter this code along with your TOTP code in the Slack verification form to complete the approval process.</p>
+    </div>
+    
+    <div style="text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px;">
+        <p>This is an automated message from AWS PIM Management System</p>
+    </div>
+</body>
+</html>
+```
+
+**Text Body**:
+```
+AWS PIM - Multi-Factor Authentication Required
+
+Hello,
+
+You are attempting to approve an AWS access request. Please use the verification code below:
+
+Code: {{code}}
+
+Request Details:
+- Requestor: {{requestor}}
+- Account: {{account_name}} ({{account_id}})
+
+This code expires in 10 minutes. If you did not initiate this request, please ignore this email.
+
+Enter this code along with your TOTP code in the Slack verification form to complete the approval process.
+
+---
+This is an automated message from AWS PIM Management System
+```
+
+### 4. IAM Permissions
 The application needs:
 - `secretsmanager:GetSecretValue` on the accounts secret
 - `sqs:SendMessage` on the notification queue
+- `ses:SendTemplatedEmail` for MFA email notifications
+- `ses:SendEmail` for MFA email notifications (if using simple emails)
 
 ## 📱 Slack Setup
 
@@ -130,6 +212,8 @@ Add these Bot Token Scopes:
 Create these slash commands:
 - `/pim [account-id]` - Request access to AWS account
 - `/acc` - List available AWS accounts
+- `/register-totp` - Register for TOTP multi-factor authentication
+- `/verify-approval <email-code> <totp-code>` - Verify approval with MFA codes (backup method)
 
 ### 5. Configure Interactivity
 1. Enable Interactivity & Shortcuts
@@ -149,21 +233,67 @@ Create these slash commands:
 /acc
 ```
 
+**Register for Multi-Factor Authentication:**
+```
+/register-totp
+```
+*Note: Your email address will be automatically retrieved from your Slack profile*
+
+**Verify Approval (Backup Method):**
+```
+/verify-approval 123456 789012
+```
+*Format: `/verify-approval <email-code> <totp-code>`*
+
 ### Approval Workflow
+
+#### Standard Workflow (without MFA)
 1. User runs `/pim [account-id]` in `#pim-management` channel
 2. Bot validates account ID and posts approval request with buttons
 3. Another user clicks "✅ Approve Access" or "❌ Deny Access"
 4. Bot updates message and sends SQS notification
 5. External system processes the approval
 
+#### Multi-Factor Authentication Workflow
+1. **First-time setup**: Approver runs `/register-totp` to set up MFA
+   - Bot retrieves user's email from Slack profile automatically
+   - Bot generates TOTP QR code and backup codes
+   - User scans QR code with authenticator app (Google Authenticator, Authy, etc.)
+   - User enters TOTP code to complete registration
+   - Registration success/failure message is sent to channel and DM
+
+2. **Approval with MFA**: When approver clicks "✅ Approve Access":
+   - Bot sends email verification code to approver's registered email
+   - Bot displays MFA verification interface with "🔐 Open Verification Form" button
+   - Approver clicks button to open modal with input fields for:
+     - Email verification code (from email)
+     - TOTP code (from authenticator app)
+   - Alternatively, approver can use `/verify-approval <email-code> <totp-code>` command
+   - Upon successful verification:
+     - Bot processes the approval and sends SQS notification
+     - Original approval message buttons are disabled
+     - Approval notification is sent to requester
+
+3. **Security Features**:
+   - Email codes expire in 10 minutes
+   - TOTP codes expire in 30 seconds (standard TOTP window)
+   - Duplicate approval prevention
+   - All approval actions are logged with full context
+
 ### Security Features
+- **Multi-Factor Authentication**: TOTP + Email verification for approvers
+  - TOTP codes from authenticator apps (Google Authenticator, Authy, etc.)
+  - Email verification codes sent to registered email addresses
+  - Automatic email retrieval from Slack user profiles
+  - Secure backup codes for account recovery
 - **Channel Restriction**: Commands only work in configured channel (default: `pim-management`)
 - **No Self-Approval**: Users cannot approve their own requests (except configured admin users)
 - **Account Validation**: Only valid account IDs from Secrets Manager are accepted
 - **Input Validation**: AWS account IDs must be exactly 12 digits
 - **Rate Limiting**: Intelligent spam protection (10 requests per 5 minutes, 2-second cooldown)
 - **Input Sanitization**: User inputs are sanitized before logging to prevent log injection
-- **Audit Logging**: All actions are logged with user context
+- **Duplicate Prevention**: Prevents multiple approvals of the same request
+- **Audit Logging**: All actions are logged with full context including MFA events
 
 ## 📊 Logging
 
@@ -189,10 +319,12 @@ Configure via `LOG_LEVEL` environment variable:
 - `error` - Error conditions
 
 ### Log Components
-- `aws` - AWS operations (Secrets Manager, SQS)
-- `slack` - Slack operations (messages, interactions)
+- `aws` - AWS operations (Secrets Manager, SQS, SES)
+- `slack` - Slack operations (messages, interactions, modals)
 - `user_action` - User-initiated actions
 - `security` - Security-related events
+- `mfa` - Multi-factor authentication events
+- `auth` - Authentication and authorization events
 
 ### Security Events Logged
 - Unauthorized channel usage
@@ -202,6 +334,13 @@ Configure via `LOG_LEVEL` environment variable:
 - Rate limiting violations
 - Input validation failures
 - Cooldown period violations
+- **MFA Events**:
+  - TOTP registration attempts (success/failure)
+  - Email verification code generation and validation
+  - TOTP code validation attempts
+  - Backup code usage
+  - MFA bypass attempts
+  - Duplicate approval prevention
 
 ## 🏗️ Architecture
 
@@ -209,11 +348,15 @@ Configure via `LOG_LEVEL` environment variable:
 - **main.go** - Application entry point
 - **pkg/config** - Configuration management with Viper
 - **pkg/logger** - Structured logging with Logrus
-- **pkg/aws** - AWS integrations (Secrets Manager, SQS)
+- **pkg/aws** - AWS integrations (Secrets Manager, SQS, SES)
   - **session.go** - AWS session manager with connection reuse
   - **cache.go** - Intelligent caching for AWS accounts data
 - **pkg/slack** - Slack bot implementation
   - **rate_limiter.go** - Rate limiting and spam protection
+- **pkg/auth** - Multi-factor authentication system
+  - **totp.go** - TOTP generation and validation
+  - **email.go** - Email verification code management
+  - **mfa.go** - Combined MFA workflow coordination
 - **pkg/utils** - Input validation and sanitization utilities
 - **pkg/errors** - Custom error types and structured error handling
 
@@ -222,6 +365,8 @@ Configure via `LOG_LEVEL` environment variable:
 - `github.com/aws/aws-sdk-go` - AWS SDK
 - `github.com/sirupsen/logrus` - Structured logging
 - `github.com/spf13/viper` - Configuration management
+- `github.com/pquerna/otp` - TOTP (Time-based One-Time Password) generation
+- `github.com/boombuler/barcode` - QR code generation for TOTP setup
 
 ## 🚀 Performance & Optimization
 
