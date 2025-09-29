@@ -27,6 +27,12 @@ type Config struct {
 	// Security Configuration
 	AdminUsers     []string `mapstructure:"admin_users"`
 	AllowedChannel string   `mapstructure:"allowed_channel"`
+	
+	// Multi-Factor Authentication Configuration
+	SESFromEmail           string   `mapstructure:"ses_from_email"`
+	AllowedEmailDomains    []string `mapstructure:"allowed_email_domains"`
+	RequireMultiFactorAuth bool     `mapstructure:"require_multi_factor_auth"`
+	TOTPIssuer             string   `mapstructure:"totp_issuer"`
 }
 
 var (
@@ -116,6 +122,11 @@ func setDefaults(v *viper.Viper) {
 	// Security defaults
 	v.SetDefault("allowed_channel", "pim-management")
 	v.SetDefault("admin_users", []string{"volodymyr.l"})
+	
+	// Multi-factor authentication defaults
+	v.SetDefault("require_multi_factor_auth", false)
+	v.SetDefault("allowed_email_domains", []string{"company.com"})
+	v.SetDefault("totp_issuer", "AWS PIM")
 }
 
 // validateConfig validates that all required configuration is present
@@ -133,6 +144,11 @@ func validateConfig(config *Config) error {
 	// Check required AWS configuration
 	if config.ManagerSQSARN == "" {
 		missing = append(missing, "manager_sqs_arn (AWSPIM_MANAGER_SQS_ARN or MANAGER_SQS_ARN)")
+	}
+	
+	// Check required Multi-factor authentication configuration (only if MFA is enabled)
+	if config.RequireMultiFactorAuth && config.SESFromEmail == "" {
+		missing = append(missing, "ses_from_email (AWSPIM_SES_FROM_EMAIL or SES_FROM_EMAIL)")
 	}
 	
 	if len(missing) > 0 {
@@ -194,6 +210,47 @@ func (c *Config) GetAllowedChannel() string {
 func (c *Config) IsAdminUser(username string) bool {
 	for _, admin := range c.AdminUsers {
 		if admin == username {
+			return true
+		}
+	}
+	return false
+}
+
+// GetSESFromEmail returns the SES from email address
+func (c *Config) GetSESFromEmail() string {
+	return c.SESFromEmail
+}
+
+// GetAllowedEmailDomains returns the list of allowed email domains
+func (c *Config) GetAllowedEmailDomains() []string {
+	return c.AllowedEmailDomains
+}
+
+// IsRequireMultiFactorAuth returns whether multi-factor authentication is required
+func (c *Config) IsRequireMultiFactorAuth() bool {
+	return c.RequireMultiFactorAuth
+}
+
+// GetTOTPIssuer returns the TOTP issuer name
+func (c *Config) GetTOTPIssuer() string {
+	return c.TOTPIssuer
+}
+
+// IsAllowedEmailDomain checks if an email domain is allowed
+func (c *Config) IsAllowedEmailDomain(email string) bool {
+	if len(c.AllowedEmailDomains) == 0 {
+		return false
+	}
+	
+	// Extract domain from email
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return false
+	}
+	domain := parts[1]
+	
+	for _, allowedDomain := range c.AllowedEmailDomains {
+		if domain == allowedDomain {
 			return true
 		}
 	}

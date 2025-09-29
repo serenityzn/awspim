@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+	"net/mail"
 	"regexp"
 	"strings"
 )
@@ -15,6 +17,16 @@ func ValidateAWSAccountID(accountID string) bool {
 	
 	// Check if it matches the AWS account ID pattern (12 digits)
 	return awsAccountIDRegex.MatchString(accountID)
+}
+
+// ValidateEmail checks if the provided string is a valid email address format
+func ValidateEmail(email string) error {
+	// Use Go's built-in email validation
+	_, err := mail.ParseAddress(email)
+	if err != nil {
+		return fmt.Errorf("invalid email format: %w", err)
+	}
+	return nil
 }
 
 // SanitizeUserInput removes potentially dangerous characters from user input for logging

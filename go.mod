@@ -5,12 +5,14 @@ go 1.23.3
 require (
 	github.com/aws/aws-sdk-go v1.47.10
 	github.com/aws/aws-secretsmanager-caching-go v1.2.0
+	github.com/pquerna/otp v1.4.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/slack-go/slack v0.17.3
 	github.com/spf13/viper v1.17.0
 )
 
 require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect

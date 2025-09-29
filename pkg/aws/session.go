@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
+	"github.com/aws/aws-sdk-go/service/ses"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/aws/aws-secretsmanager-caching-go/secretcache"
 	"github.com/serenityzn/awspim/pkg/config"
@@ -18,6 +19,7 @@ import (
 type SessionManager struct {
 	session     *session.Session
 	sqsClient   *sqs.SQS
+	sesClient   *ses.SES
 	secretCache *secretcache.Cache
 	region      string
 	mutex       sync.RWMutex
@@ -79,6 +81,7 @@ func GetSessionManager() (*SessionManager, error) {
 	globalSessionManager = &SessionManager{
 		session:     sess,
 		sqsClient:   sqs.New(sess),
+		sesClient:   ses.New(sess),
 		secretCache: secretCache,
 		region:      region,
 		lastUpdated: time.Now(),
@@ -96,6 +99,13 @@ func (sm *SessionManager) GetSQSClient() *sqs.SQS {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 	return sm.sqsClient
+}
+
+// GetSESClient returns the cached SES client
+func (sm *SessionManager) GetSESClient() *ses.SES {
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
+	return sm.sesClient
 }
 
 // GetSecretCache returns the cached secret manager client
@@ -147,6 +157,7 @@ func (sm *SessionManager) RefreshIfNeeded() error {
 
 			sm.session = sess
 			sm.sqsClient = sqs.New(sess)
+			sm.sesClient = ses.New(sess)
 			sm.region = newRegion
 
 			// Recreate secret cache with new session

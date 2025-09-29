@@ -17,6 +17,14 @@ admin_users:
   - "volodymyr.l"
   - "admin.user"
 
+# Multi-Factor Authentication Configuration (OPTIONAL - for enhanced approval security)
+require_multi_factor_auth: false
+ses_from_email: "noreply@company.com"
+totp_issuer: "AWS PIM"
+allowed_email_domains:
+  - "company.com"
+  - "organization.org"
+
 # Environment Variable Mapping:
 # Config File          → Environment Variable
 # slack_bot_token      → AWSPIM_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN
