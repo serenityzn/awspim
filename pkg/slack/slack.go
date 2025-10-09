@@ -566,8 +566,37 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			channelID, _ := approvalData["channel_id"].(string)
 			messageTimestamp, _ := approvalData["message_timestamp"].(string)
 
-			// Process the approval
-			err = h.processApproval(requestedUserID, requestorUsername, accountID, accountName, cmd.UserID, approverUsername)
+			// Get email addresses for requestor and approver
+			requestorEmail, err := h.getUserEmail(requestedUserID)
+			if err != nil {
+				log.LogSlackOperation("get_requestor_email", logger.Fields{
+					"user_id": requestedUserID,
+				}).WithError(err).Error("Failed to get requestor email for MFA verification")
+				
+				message := "❌ **Processing Failed**\n\nUnable to retrieve requestor email address. Please contact administrator."
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				if msgErr != nil {
+					log.LogSlackOperation("send_error_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send error message")
+				}
+				return err
+			}
+			
+			approverEmail, err := h.getUserEmail(cmd.UserID)
+			if err != nil {
+				log.LogSlackOperation("get_approver_email", logger.Fields{
+					"user_id": cmd.UserID,
+				}).WithError(err).Error("Failed to get approver email for MFA verification")
+				
+				message := "❌ **Processing Failed**\n\nUnable to retrieve your email address. Please contact administrator."
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				if msgErr != nil {
+					log.LogSlackOperation("send_error_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send error message")
+				}
+				return err
+			}
+
+			// Process the approval using email addresses
+			err = h.processApproval(requestedUserID, requestorEmail, accountID, accountName, cmd.UserID, approverEmail)
 
 			// Update original message to remove buttons after successful approval
 			if channelID != "" && messageTimestamp != "" {
@@ -577,8 +606,8 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					fmt.Sprintf("✅ **Access Approved**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** %s\n\n_This request has been processed._",
 						utils.SanitizeUserInput(accountName),
 						utils.SanitizeUserInput(accountID),
-						utils.SanitizeUserInput(requestorUsername),
-						utils.SanitizeUserInput(approverUsername)), false, false), nil, nil),
+						utils.SanitizeUserInput(requestorEmail),
+						utils.SanitizeUserInput(approverEmail)), false, false), nil, nil),
 				}
 				_, _, _, updateErr := h.client.UpdateMessage(channelID, messageTimestamp, slack.MsgOptionBlocks(originalBlocks...))
 				if updateErr != nil {
@@ -884,7 +913,26 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 						}
 						
 						// Legacy approval flow (when MFA is disabled)
-						err := h.processApproval(requestedUserID, requestorUsername, accountID, accountName, approverUserID, approverUser)
+						// Get email addresses for requestor and approver
+						requestorEmail, err := h.getUserEmail(requestedUserID)
+						if err != nil {
+							log.LogSlackOperation("get_requestor_email_legacy", logger.Fields{
+								"user_id": requestedUserID,
+							}).WithError(err).Error("Failed to get requestor email for legacy approval")
+							client.Ack(*evt.Request)
+							return nil
+						}
+						
+						approverEmail, err := h.getUserEmail(approverUserID)
+						if err != nil {
+							log.LogSlackOperation("get_approver_email_legacy", logger.Fields{
+								"user_id": approverUserID,
+							}).WithError(err).Error("Failed to get approver email for legacy approval")
+							client.Ack(*evt.Request)
+							return nil
+						}
+						
+						err = h.processApproval(requestedUserID, requestorEmail, accountID, accountName, approverUserID, approverEmail)
 						if err != nil {
 							log.LogSlackOperation("process_legacy_approval", logger.Fields{
 								"account_id": accountID,
@@ -895,7 +943,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 						}
 					
 					responseText = fmt.Sprintf("✅ *Access Approved*\n\nAdmin access to account *%s* (%s) has been *APPROVED* by *%s*.\n\n🎯 Access granted to <@%s>.\n\n📨 Notification sent to management system.", 
-						accountID, accountName, approverUser, requestedUserID)
+						accountID, accountName, approverEmail, requestedUserID)
 					} else if action.ActionID == "deny_access" {
 						// Create unique approval ID to prevent duplicate processing
 						approvalID := fmt.Sprintf("%s:%s:%s:%s", requestedUserID, accountID, approverUserID, interaction.Message.Timestamp)
@@ -932,15 +980,25 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 						h.processedApprovals[approvalID] = true
 						h.approvalMutex.Unlock()
 						
+						// Get approver email for denial logging and display
+						approverEmail, err := h.getUserEmail(approverUserID)
+						if err != nil {
+							log.LogSlackOperation("get_approver_email_denial", logger.Fields{
+								"user_id": approverUserID,
+							}).WithError(err).Error("Failed to get approver email for denial")
+							// Continue with username fallback for denial
+							approverEmail = approverUser
+						}
+						
 						log.LogUserAction(approverUserID, "deny_access", logger.Fields{
 							"requestor": requestorUsername,
-							"approver": approverUser,
+							"approver_email": approverEmail,
 							"account_id": accountID,
 							"account_name": accountName,
 						}).Info("Access request denied")
 						
 						responseText = fmt.Sprintf("❌ *Access Denied*\n\nAdmin access to account *%s* (%s) has been *DENIED* by *%s*.\n\n🚫 Access not granted to <@%s>.", 
-							accountID, accountName, approverUser, requestedUserID)
+							accountID, accountName, approverEmail, requestedUserID)
 					}
 
 				// Acknowledge the interaction
@@ -1137,8 +1195,27 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 	messageTimestamp := parts[5]
 	approverUserID := interaction.User.ID
 
+	// Get email addresses for display in updated message
+	requestorEmail, err := h.getUserEmail(requestedUserID)
+	if err != nil {
+		log.LogSlackOperation("get_requestor_email_modal", logger.Fields{
+			"user_id": requestedUserID,
+		}).WithError(err).Error("Failed to get requestor email for modal verification")
+		// Use username as fallback for display
+		requestorEmail = requestorUsername
+	}
+	
+	approverEmail, err := h.getUserEmail(approverUserID)
+	if err != nil {
+		log.LogSlackOperation("get_approver_email_modal", logger.Fields{
+			"user_id": approverUserID,
+		}).WithError(err).Error("Failed to get approver email for modal verification")
+		// Use username as fallback for display
+		approverEmail = interaction.User.Name
+	}
+
 	// Verify the approval using MFA
-	_, err := h.authenticator.VerifyApproval(approverUserID, emailCode, totpCode)
+	_, err = h.authenticator.VerifyApproval(approverUserID, emailCode, totpCode)
 	if err != nil {
 		log.LogSecurityEvent("approval_verification_failed", logger.Fields{
 			"approver_user_id": approverUserID,
@@ -1165,8 +1242,8 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 					fmt.Sprintf("✅ **Access Approved**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** %s\n\n_This request has been processed._",
 						utils.SanitizeUserInput(accountName),
 						utils.SanitizeUserInput(accountID),
-						utils.SanitizeUserInput(requestorUsername),
-						utils.SanitizeUserInput(interaction.User.Name)), false, false), nil, nil),
+						utils.SanitizeUserInput(requestorEmail),
+						utils.SanitizeUserInput(approverEmail)), false, false), nil, nil),
 		}
 		_, _, _, updateErr := h.client.UpdateMessage(channelID, messageTimestamp, slack.MsgOptionBlocks(originalBlocks...))
 		if updateErr != nil {
@@ -1177,8 +1254,8 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 		}
 	}
 	
-	// Process the approval
-	err = h.processApproval(requestedUserID, requestorUsername, accountID, accountName, approverUserID, interaction.User.Name)
+	// Process the approval using email addresses (already retrieved above)
+	err = h.processApproval(requestedUserID, requestorEmail, accountID, accountName, approverUserID, approverEmail)
 	if err != nil {
 		return err
 	}
@@ -1214,30 +1291,45 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 }
 
 // processApproval handles the actual approval logic (extracted from existing code)
-func (h *handler) processApproval(requestedUserID, requestorUsername, accountID, accountName, approverUserID, approverUsername string) error {
+// getUserEmail retrieves email address from Slack user ID
+func (h *handler) getUserEmail(userID string) (string, error) {
+	userInfo, err := h.client.GetUserInfo(userID)
+	if err != nil {
+		return "", err
+	}
+	
+	email := userInfo.Profile.Email
+	if email == "" {
+		return "", fmt.Errorf("user %s has no email in Slack profile", userID)
+	}
+	
+	return email, nil
+}
+
+func (h *handler) processApproval(requestedUserID, requestorEmail, accountID, accountName, approverUserID, approverEmail string) error {
 	log := logger.GetDefaultLogger()
 
 	log.LogUserAction(approverUserID, "approve_access", logger.Fields{
 		"account_id": accountID,
 		"account_name": accountName,
-		"requestor": requestorUsername,
-		"approver": approverUsername,
+		"requestor_email": requestorEmail,
+		"approver_email": approverEmail,
 	}).Info("Access request approved")
 
-	// Send approval notification
-	if err := awspkg.SendApprovalNotification(requestorUsername, approverUsername, accountID); err != nil {
+	// Send approval notification using email addresses
+	if err := awspkg.SendApprovalNotification(requestorEmail, approverEmail, accountID); err != nil {
 		log.LogSlackOperation("send_sqs_notification", logger.Fields{
 			"account_id": accountID,
-			"requestor": requestorUsername,
-			"approver": approverUsername,
+			"requestor_email": requestorEmail,
+			"approver_email": approverEmail,
 		}).WithError(err).Error("Failed to send SQS approval notification")
 	}
 
 	approvalMessage := fmt.Sprintf("✅ **Access Approved**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** %s",
 		utils.SanitizeUserInput(accountName),
 		utils.SanitizeUserInput(accountID),
-		utils.SanitizeUserInput(requestorUsername),
-		utils.SanitizeUserInput(approverUsername))
+		utils.SanitizeUserInput(requestorEmail),
+		utils.SanitizeUserInput(approverEmail))
 
 	_, _, err := h.client.PostMessage(requestedUserID, slack.MsgOptionText(approvalMessage, false))
 	if err != nil {
