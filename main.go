@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	
 	"github.com/serenityzn/awspim/pkg/config"
 	"github.com/serenityzn/awspim/pkg/logger"
@@ -28,13 +30,38 @@ func run() error {
 	log := logger.GetDefaultLogger()
 	log.Info("Configuration loaded successfully")
 	
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	
+	// Channel to signal when bot has stopped
+	done := make(chan error, 1)
+	
 	log.Info("Starting AWS PIM Slack bot for slash commands")
 	
-	// Start Slack bot
-	if err := slackpkg.StartSlackBot(); err != nil {
-		log.WithError(err).Error("Failed to start Slack bot")
-		return fmt.Errorf("failed to start Slack bot: %w", err)
-	}
+	// Start Slack bot in a goroutine
+	go func() {
+		done <- slackpkg.StartSlackBot()
+	}()
 	
-	return nil
+	// Wait for either:
+	// 1. Bot to exit with error
+	// 2. Interrupt signal (SIGTERM/SIGINT)
+	select {
+	case err := <-done:
+		if err != nil {
+			log.WithError(err).Error("Slack bot stopped with error")
+			return fmt.Errorf("slack bot error: %w", err)
+		}
+		log.Info("Slack bot stopped normally")
+		return nil
+		
+	case sig := <-sigChan:
+		log.WithField("signal", sig.String()).Info("Received shutdown signal, gracefully exiting")
+		log.Info("Slack WebSocket connections will be closed automatically")
+		
+		// The Slack socketmode client will automatically disconnect when process exits
+		// We don't need to explicitly close it
+		return nil
+	}
 }

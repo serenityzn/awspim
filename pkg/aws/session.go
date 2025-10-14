@@ -17,13 +17,14 @@ import (
 
 // SessionManager manages AWS sessions and service clients with connection reuse
 type SessionManager struct {
-	session     *session.Session
-	sqsClient   *sqs.SQS
-	sesClient   *ses.SES
-	secretCache *secretcache.Cache
-	region      string
-	mutex       sync.RWMutex
-	lastUpdated time.Time
+	session              *session.Session
+	sqsClient            *sqs.SQS
+	sesClient            *ses.SES
+	secretsManagerClient *secretsmanager.SecretsManager
+	secretCache          *secretcache.Cache
+	region               string
+	mutex                sync.RWMutex
+	lastUpdated          time.Time
 }
 
 var (
@@ -79,12 +80,13 @@ func GetSessionManager() (*SessionManager, error) {
 	}
 
 	globalSessionManager = &SessionManager{
-		session:     sess,
-		sqsClient:   sqs.New(sess),
-		sesClient:   ses.New(sess),
-		secretCache: secretCache,
-		region:      region,
-		lastUpdated: time.Now(),
+		session:              sess,
+		sqsClient:            sqs.New(sess),
+		sesClient:            ses.New(sess),
+		secretsManagerClient: secretsmanager.New(sess),
+		secretCache:          secretCache,
+		region:               region,
+		lastUpdated:          time.Now(),
 	}
 
 	log.LogAWSOperation("session_manager_ready", logger.Fields{
@@ -106,6 +108,13 @@ func (sm *SessionManager) GetSESClient() *ses.SES {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 	return sm.sesClient
+}
+
+// GetSecretsManagerClient returns the cached Secrets Manager client
+func (sm *SessionManager) GetSecretsManagerClient() *secretsmanager.SecretsManager {
+	sm.mutex.RLock()
+	defer sm.mutex.RUnlock()
+	return sm.secretsManagerClient
 }
 
 // GetSecretCache returns the cached secret manager client
@@ -158,6 +167,7 @@ func (sm *SessionManager) RefreshIfNeeded() error {
 			sm.session = sess
 			sm.sqsClient = sqs.New(sess)
 			sm.sesClient = ses.New(sess)
+			sm.secretsManagerClient = secretsmanager.New(sess)
 			sm.region = newRegion
 
 			// Recreate secret cache with new session

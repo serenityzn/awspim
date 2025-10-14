@@ -43,21 +43,21 @@ type PendingVerification struct {
 
 // TOTPEmailAuthenticator handles TOTP + Email multi-factor authentication
 type TOTPEmailAuthenticator struct {
-	registrations        map[string]*UserRegistration    // userID -> registration
-	pendingVerifications map[string]*PendingVerification // userID -> pending verification
-	mutex                sync.RWMutex
+	storage              RegistrationStorage             // Persistent storage for user registrations
+	pendingVerifications map[string]*PendingVerification // userID -> pending verification (in-memory, ephemeral)
+	mutex                sync.RWMutex                    // Protects pendingVerifications
 	sesClient            *ses.SES
 }
 
 // NewTOTPEmailAuthenticator creates a new TOTP + Email authenticator
-func NewTOTPEmailAuthenticator(sesClient *ses.SES) *TOTPEmailAuthenticator {
+func NewTOTPEmailAuthenticator(sesClient *ses.SES, storage RegistrationStorage) *TOTPEmailAuthenticator {
 	auth := &TOTPEmailAuthenticator{
-		registrations:        make(map[string]*UserRegistration),
+		storage:              storage,
 		pendingVerifications: make(map[string]*PendingVerification),
 		sesClient:            sesClient,
 	}
 	
-	// Start cleanup routine
+	// Start cleanup routine for pending verifications
 	go auth.startCleanupRoutine()
 	
 	return auth
@@ -100,10 +100,10 @@ func (t *TOTPEmailAuthenticator) StartRegistration(userID, email string) (*otp.K
 		IsActive:     false, // Will be activated after verification
 	}
 	
-	// Store temporarily
-	t.mutex.Lock()
-	t.registrations[userID] = registration
-	t.mutex.Unlock()
+	// Store in persistent storage
+	if err := t.storage.SaveRegistration(userID, registration); err != nil {
+		return nil, errors.NewInternalError("failed to save registration", err)
+	}
 	
 	log.LogUserAction(userID, "totp_registration_started", logger.Fields{
 		"email": utils.SanitizeUserInput(email),
@@ -116,19 +116,15 @@ func (t *TOTPEmailAuthenticator) StartRegistration(userID, email string) (*otp.K
 func (t *TOTPEmailAuthenticator) CompleteRegistration(userID, emailCode, totpCode string) error {
 	log := logger.GetDefaultLogger()
 	
-	t.mutex.Lock()
-	registration, exists := t.registrations[userID]
-	if !exists {
-		t.mutex.Unlock()
-		return errors.NewSecurityError("no pending registration found", nil)
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil {
+		return errors.NewSecurityError("no pending registration found", err)
 	}
 	
 	// Check if already active
 	if registration.IsActive {
-		t.mutex.Unlock()
 		return errors.NewSecurityError("user already registered", nil)
 	}
-	t.mutex.Unlock()
 	
 	// Validate TOTP code
 	valid := totp.Validate(totpCode, registration.TOTPSecret)
@@ -141,10 +137,12 @@ func (t *TOTPEmailAuthenticator) CompleteRegistration(userID, emailCode, totpCod
 	}
 	
 	// Activate registration
-	t.mutex.Lock()
 	registration.IsActive = true
 	registration.LastUsedAt = time.Now()
-	t.mutex.Unlock()
+	
+	if err := t.storage.SaveRegistration(userID, registration); err != nil {
+		return errors.NewInternalError("failed to save registration", err)
+	}
 	
 	log.LogUserAction(userID, "totp_registration_completed", logger.Fields{
 		"email": utils.SanitizeUserInput(registration.Email),
@@ -158,14 +156,11 @@ func (t *TOTPEmailAuthenticator) InitiateApproval(userID string, approvalData ma
 	log := logger.GetDefaultLogger()
 	
 	// Check if user is registered
-	t.mutex.RLock()
-	registration, exists := t.registrations[userID]
-	if !exists || !registration.IsActive {
-		t.mutex.RUnlock()
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil || !registration.IsActive {
 		return "", errors.NewSecurityError("user not registered for multi-factor authentication", nil).
 			WithContext("user_id", userID)
 	}
-	t.mutex.RUnlock()
 	
 	// Generate email verification code
 	emailCode, err := t.generateEmailCode()
@@ -245,13 +240,10 @@ func (t *TOTPEmailAuthenticator) VerifyApproval(userID, emailCode, totpCode stri
 	t.mutex.Unlock()
 	
 	// Get user registration for TOTP validation
-	t.mutex.RLock()
-	registration, exists := t.registrations[userID]
-	if !exists || !registration.IsActive {
-		t.mutex.RUnlock()
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil || !registration.IsActive {
 		return nil, errors.NewSecurityError("user not registered", nil)
 	}
-	t.mutex.RUnlock()
 	
 	// Validate email code
 	if verification.EmailCode != emailCode {
@@ -289,8 +281,14 @@ func (t *TOTPEmailAuthenticator) VerifyApproval(userID, emailCode, totpCode stri
 	// Both codes valid - clean up and return
 	t.mutex.Lock()
 	delete(t.pendingVerifications, userID)
-	registration.LastUsedAt = time.Now()
 	t.mutex.Unlock()
+	
+	// Update last used timestamp in persistent storage
+	if err := t.storage.UpdateLastUsed(userID, time.Now()); err != nil {
+		log.LogSecurityEvent("failed_update_last_used", logger.Fields{
+			"user_id": userID,
+		}).WithError(err).Warn("Failed to update last used timestamp")
+	}
 	
 	log.LogUserAction(userID, "approval_verified", logger.Fields{
 		"email": utils.SanitizeUserInput(registration.Email),
@@ -301,11 +299,26 @@ func (t *TOTPEmailAuthenticator) VerifyApproval(userID, emailCode, totpCode stri
 
 // IsUserRegistered checks if a user is registered for MFA
 func (t *TOTPEmailAuthenticator) IsUserRegistered(userID string) bool {
-	t.mutex.RLock()
-	defer t.mutex.RUnlock()
+	log := logger.GetDefaultLogger()
 	
-	registration, exists := t.registrations[userID]
-	return exists && registration.IsActive
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil {
+		log.LogSecurityEvent("user_registration_check", logger.Fields{
+			"user_id": userID,
+			"registered": false,
+			"error": err.Error(),
+		}).Debug("User not registered - registration not found")
+		return false
+	}
+	
+	isActive := registration.IsActive
+	log.LogSecurityEvent("user_registration_check", logger.Fields{
+		"user_id": userID,
+		"registered": isActive,
+		"email": utils.SanitizeUserInput(registration.Email),
+	}).Debug("User registration check completed")
+	
+	return isActive
 }
 
 // IsVerificationPending checks if a user has a pending verification
@@ -325,11 +338,8 @@ func (t *TOTPEmailAuthenticator) IsVerificationPending(userID string) bool {
 
 // GetRegisteredUser returns the registered user info
 func (t *TOTPEmailAuthenticator) GetRegisteredUser(userID string) *UserRegistration {
-	t.mutex.RLock()
-	defer t.mutex.RUnlock()
-	
-	registration, exists := t.registrations[userID]
-	if !exists || !registration.IsActive {
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil || !registration.IsActive {
 		return nil
 	}
 	
@@ -338,13 +348,11 @@ func (t *TOTPEmailAuthenticator) GetRegisteredUser(userID string) *UserRegistrat
 
 // GetUserEmail returns the registered email for a user
 func (t *TOTPEmailAuthenticator) GetUserEmail(userID string) string {
-	t.mutex.RLock()
-	defer t.mutex.RUnlock()
-	
-	if registration, exists := t.registrations[userID]; exists {
-		return registration.Email
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil {
+		return ""
 	}
-	return ""
+	return registration.Email
 }
 
 // generateEmailCode generates a 6-digit email verification code
@@ -381,19 +389,18 @@ func (t *TOTPEmailAuthenticator) generateVerificationID() string {
 
 // useBackupCode validates and consumes a backup code
 func (t *TOTPEmailAuthenticator) useBackupCode(userID, code string) bool {
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-	
-	registration, exists := t.registrations[userID]
-	if !exists {
+	registration, err := t.storage.GetRegistration(userID)
+	if err != nil {
 		return false
 	}
 	
-	// Find and remove the backup code
+	// Find the backup code
 	for i, backupCode := range registration.BackupCodes {
 		if backupCode == strings.ToUpper(code) {
-			// Remove the used backup code
-			registration.BackupCodes = append(registration.BackupCodes[:i], registration.BackupCodes[i+1:]...)
+			// Remove the used backup code via storage
+			if err := t.storage.RemoveBackupCode(userID, i); err != nil {
+				return false
+			}
 			return true
 		}
 	}

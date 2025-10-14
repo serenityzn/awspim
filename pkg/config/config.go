@@ -33,6 +33,7 @@ type Config struct {
 	AllowedEmailDomains    []string `mapstructure:"allowed_email_domains"`
 	RequireMultiFactorAuth bool     `mapstructure:"require_multi_factor_auth"`
 	TOTPIssuer             string   `mapstructure:"totp_issuer"`
+	MFAStorageSecret       string   `mapstructure:"mfa_storage_secret"` // Secrets Manager secret name for storing user 2FA registrations
 }
 
 var (
@@ -65,6 +66,11 @@ func Load() (*Config, error) {
 	v.BindEnv("log_level", "AWSPIM_LOG_LEVEL", "LOG_LEVEL")
 	v.BindEnv("allowed_channel", "AWSPIM_ALLOWED_CHANNEL")
 	v.BindEnv("admin_users", "AWSPIM_ADMIN_USERS")
+	v.BindEnv("require_multi_factor_auth", "AWSPIM_REQUIRE_MULTI_FACTOR_AUTH")
+	v.BindEnv("ses_from_email", "AWSPIM_SES_FROM_EMAIL", "SES_FROM_EMAIL")
+	v.BindEnv("totp_issuer", "AWSPIM_TOTP_ISSUER")
+	v.BindEnv("allowed_email_domains", "AWSPIM_ALLOWED_EMAIL_DOMAINS")
+	v.BindEnv("mfa_storage_secret", "AWSPIM_MFA_STORAGE_SECRET", "MFA_STORAGE_SECRET")
 	
 	// Set defaults
 	setDefaults(v)
@@ -127,6 +133,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("require_multi_factor_auth", false)
 	v.SetDefault("allowed_email_domains", []string{"company.com"})
 	v.SetDefault("totp_issuer", "AWS PIM")
+	v.SetDefault("mfa_storage_secret", "pim/mfa-registrations")
 }
 
 // validateConfig validates that all required configuration is present
@@ -234,6 +241,11 @@ func (c *Config) IsRequireMultiFactorAuth() bool {
 // GetTOTPIssuer returns the TOTP issuer name
 func (c *Config) GetTOTPIssuer() string {
 	return c.TOTPIssuer
+}
+
+// GetMFAStorageSecret returns the Secrets Manager secret name for MFA storage
+func (c *Config) GetMFAStorageSecret() string {
+	return c.MFAStorageSecret
 }
 
 // IsAllowedEmailDomain checks if an email domain is allowed

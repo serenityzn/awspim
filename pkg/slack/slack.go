@@ -99,17 +99,34 @@ func StartSlackBot() error {
 	if cfg.IsRequireMultiFactorAuth() {
 		log.LogSlackOperation("mfa_initialization", logger.Fields{"action": "creating_totp_authenticator"}).Info("Initializing TOTP + Email authenticator")
 		
-		// Get SES client for email sending
+		// Get AWS session manager for SES and Secrets Manager
 		sessionManager, err := awspkg.GetSessionManager()
 		if err != nil {
 			log.LogSlackOperation("mfa_initialization", logger.Fields{"error": "failed_to_get_session_manager"}).WithError(err).Error("Failed to get AWS session manager")
 			return errors.NewConfigurationError("failed to get AWS session manager", err)
 		}
 		
+		// Get SES client for email sending
 		sesClient := sessionManager.GetSESClient()
-		authenticator = auth.NewTOTPEmailAuthenticator(sesClient)
 		
-		log.LogSlackOperation("mfa_initialization", logger.Fields{"action": "totp_authenticator_created"}).Info("TOTP + Email authenticator initialized successfully")
+		// Get Secrets Manager client for persistent storage
+		secretsManagerClient := sessionManager.GetSecretsManagerClient()
+		
+		// Initialize storage backend (Secrets Manager)
+		storage, err := auth.NewSecretsManagerStorage(secretsManagerClient, cfg.GetMFAStorageSecret())
+		if err != nil {
+			log.LogSlackOperation("mfa_initialization", logger.Fields{"error": "failed_to_initialize_storage"}).WithError(err).Error("Failed to initialize MFA storage")
+			return errors.NewConfigurationError("failed to initialize MFA storage", err)
+		}
+		
+		// Create authenticator with storage
+		authenticator = auth.NewTOTPEmailAuthenticator(sesClient, storage)
+		
+		log.LogSlackOperation("mfa_initialization", logger.Fields{
+			"action": "totp_authenticator_created",
+			"storage_backend": "secretsmanager",
+			"storage_secret": cfg.GetMFAStorageSecret(),
+		}).Info("TOTP + Email authenticator initialized successfully")
 	} else {
 		log.LogSlackOperation("mfa_initialization", logger.Fields{"action": "mfa_disabled"}).Info("Multi-factor authentication not enabled - using legacy approval flow")
 	}
