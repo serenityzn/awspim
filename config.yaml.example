@@ -1,0 +1,50 @@
+# Slack Configuration (REQUIRED)
+slack_bot_token: "xoxb-your-slack-bot-token-here"
+slack_app_token: "xapp-your-slack-app-token-here"
+
+# AWS Configuration (REQUIRED)
+aws_region: "us-east-2"
+aws_accounts_secret: "pim/aws-accounts"
+manager_sqs_arn: "arn:aws:sqs:us-east-2:123456789012:pim-management-queue"
+
+# Application Configuration (OPTIONAL)
+environment: "development"
+log_level: "info"
+
+# Security Configuration (OPTIONAL)
+allowed_channel: "pim-management"
+admin_users:
+  - "test"
+  - "admin.user"
+
+# Multi-Factor Authentication Configuration (OPTIONAL - for enhanced approval security)
+require_multi_factor_auth: false
+ses_from_email: "noreply@company.com"
+totp_issuer: "AWS PIM"
+mfa_storage_secret: "pim/mfa-registrations"  # Secrets Manager secret name for storing user 2FA registrations
+allowed_email_domains:
+  - "company.com"
+  - "organization.org"
+
+# Environment Variable Mapping:
+# Config File          → Environment Variable
+# slack_bot_token      → AWSPIM_SLACK_BOT_TOKEN or SLACK_BOT_TOKEN
+# slack_app_token      → AWSPIM_SLACK_APP_TOKEN or SLACK_APP_TOKEN  
+# aws_region           → AWSPIM_AWS_REGION or AWS_REGION
+# aws_accounts_secret  → AWSPIM_AWS_ACCOUNTS_SECRET or AWS_ACCOUNTS_SECRET
+# manager_sqs_arn      → AWSPIM_MANAGER_SQS_ARN or MANAGER_SQS_ARN
+# environment          → AWSPIM_ENVIRONMENT or ENVIRONMENT
+# log_level            → AWSPIM_LOG_LEVEL or LOG_LEVEL
+# allowed_channel      → AWSPIM_ALLOWED_CHANNEL
+# admin_users          → AWSPIM_ADMIN_USERS (comma-separated)
+# require_multi_factor_auth → AWSPIM_REQUIRE_MULTI_FACTOR_AUTH
+# ses_from_email       → AWSPIM_SES_FROM_EMAIL or SES_FROM_EMAIL
+# totp_issuer          → AWSPIM_TOTP_ISSUER
+# mfa_storage_secret   → AWSPIM_MFA_STORAGE_SECRET or MFA_STORAGE_SECRET
+# allowed_email_domains → AWSPIM_ALLOWED_EMAIL_DOMAINS (comma-separated)
+
+# Priority Order:
+# 1. Config file values (this file)
+# 2. Environment variables
+# 3. Default values (see config/config.go)
+
