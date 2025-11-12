@@ -38,3 +38,9 @@ config.toml
 config.yml
 config.ini
 config.env
+
+# GoReleaser artifacts
+dist/
+*.tar.gz
+*.zip
+checksums.txt
