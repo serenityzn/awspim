@@ -1,0 +1,21 @@
+[Unit]
+Description=AWS PIM - Slack bot for AWS temporary credentials
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/awspim/build/pim
+Restart=on-failure
+RestartSec=10
+# Optional: run as dedicated user (create with: sudo useradd -r -s /bin/false awspim)
+# User=awspim
+# Group=awspim
+# Config is read from /etc/awspim/config.yaml by default
+WorkingDirectory=/home/awspim
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=awspim
+
+[Install]
+WantedBy=multi-user.target
