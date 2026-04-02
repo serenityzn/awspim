@@ -1,0 +1,99 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Image
+# ──────────────────────────────────────────────────────────────────────────────
+image:
+  repository: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-2.amazonaws.com/popaihealth-prod-pim
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Replica count – keep at 1; Slack Socket Mode supports only one active
+# WebSocket connection per app token.
+# ──────────────────────────────────────────────────────────────────────────────
+replicaCount: 1
+
+# ──────────────────────────────────────────────────────────────────────────────
+# External Secrets Operator
+#
+# ESO fetches the AWS Secrets Manager secret and creates a k8s Secret that
+# contains a single key "config.yaml" with the full config file content.
+# The Deployment mounts it at /etc/awspim/config.yaml.
+#
+# In AWS Secrets Manager, create "pim-config" as a PLAINTEXT secret whose
+# value is the full config.yaml content, for example:
+#
+#   slack_bot_token: "xoxb-..."
+#   slack_app_token: "xapp-..."
+#   aws_region: "us-east-2"
+#   aws_accounts_secret: "pim/aws-accounts"
+#   manager_sqs_arn: "arn:aws:sqs:..."
+#   environment: "production"
+#   log_level: "info"
+#   allowed_channel: "pim-management"
+#   admin_users:
+#     - "alice"
+#     - "bob"
+#   require_multi_factor_auth: false
+# ──────────────────────────────────────────────────────────────────────────────
+externalSecret:
+  secretStoreName: "aws-secrets-manager"
+  secretStoreKind: "ClusterSecretStore"   # ClusterSecretStore | SecretStore
+  remoteSecretName: "pim-config"
+  refreshInterval: "1h"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ServiceAccount & IRSA
+# ──────────────────────────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/awspim-role
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pod configuration
+# ──────────────────────────────────────────────────────────────────────────────
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Horizontal Pod Autoscaler
+# ──────────────────────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 80

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: awspim
+description: AWS PIM – Slack bot for AWS temporary credentials management
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - aws
+  - slack
+  - pim
+  - credentials
+home: https://github.com/serenityzn/awspim
+maintainers:
+  - name: serenityzn

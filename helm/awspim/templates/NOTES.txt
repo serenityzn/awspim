@@ -1,0 +1,35 @@
+AWS PIM has been deployed successfully.
+
+Release : {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Image    : {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT – Slack Socket Mode
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Only ONE replica should be running at a time. The bot
+connects to Slack via a WebSocket; multiple replicas would
+result in duplicate event processing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AWS Permissions (IRSA)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The pod assumes IAM permissions via the ServiceAccount
+"{{ include "awspim.serviceAccountName" . }}".
+Ensure the IAM role attached to this ServiceAccount has
+the following permissions:
+
+  secretsmanager:GetSecretValue   (pim/aws-accounts, pim/mfa-*)
+  sqs:SendMessage                 (manager_sqs_arn)
+  ses:SendEmail                   (if MFA is enabled)
+  sts:AssumeRole                  (for generating temp creds)
+
+Set the IAM role ARN in values:
+  serviceAccount.annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Check pod status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/instance={{ .Release.Name }}"
+  kubectl logs -n {{ .Release.Namespace }} -l "app.kubernetes.io/instance={{ .Release.Name }}" --follow
