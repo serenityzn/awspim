@@ -33,10 +33,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract CA certificates for Docker image
-        run: |
-          docker run --rm --entrypoint cat alpine:latest /etc/ssl/certs/ca-certificates.crt > ca-certificates.crt
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
