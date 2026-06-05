@@ -44,6 +44,7 @@ Both components communicate exclusively via **two AWS SQS queues** — no direct
    export SLACK_BOT_TOKEN="xoxb-your-token"
    export SLACK_APP_TOKEN="xapp-your-token"  
    export MANAGER_SQS_ARN="arn:aws:sqs:region:account:queue"
+   export RESPONSE_SQS_URL="https://sqs.region.amazonaws.com/account/response-queue"
    ```
 
 2. **Run the application:**
