@@ -442,7 +442,7 @@ The `terraform/` directory contains ready-to-use Terraform code that provisions 
 | IAM role — Lambda | Permissions for the `awspim-manager` Lambda |
 | Lambda function | `awspim-manager` deployment (zip/binary) |
 | EventBridge rule | Triggers Lambda every 15 min to revoke expired sessions |
-| ECR repository | Docker images for the `awspim` Slack bot |
+
 
 ```bash
 cd terraform

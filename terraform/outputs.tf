@@ -70,14 +70,6 @@ output "manager_lambda_name" {
   value       = aws_lambda_function.manager.function_name
 }
 
-# ── ECR ────────────────────────────────────────────────────────────────────────
-
-output "ecr_awspim_url" {
-  description = "Set as image.repository in helm/awspim/values.yaml"
-  value       = aws_ecr_repository.awspim.repository_url
-}
-
-
 # ── awspim config snippet ──────────────────────────────────────────────────────
 
 output "awspim_config_snippet" {

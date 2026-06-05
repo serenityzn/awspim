@@ -30,14 +30,6 @@ variable "sqs_visibility_timeout_seconds" {
   default     = 60
 }
 
-# ── ECR ────────────────────────────────────────────────────────────────────────
-
-variable "ecr_image_retention_count" {
-  description = "Number of images to keep in ECR per repository"
-  type        = number
-  default     = 10
-}
-
 # ── SES ────────────────────────────────────────────────────────────────────────
 
 variable "ses_from_email" {
