@@ -6,15 +6,16 @@ slack_app_token: "xapp-your-slack-app-token-here"
 aws_region: "us-east-2"
 aws_accounts_secret: "pim/aws-accounts"
 manager_sqs_arn: "arn:aws:sqs:us-east-2:123456789012:pim-management-queue"
+response_sqs_url: ""  # Optional: SQS URL where the assigner sends results back (e.g. https://sqs.us-east-2.amazonaws.com/123456789012/PIM-Response)
 
 # Application Configuration (OPTIONAL)
 environment: "development"
 log_level: "info"
+test_mode: false   # Set to true to prepend [TEST MODE] to all bot messages
 
 # Security Configuration (OPTIONAL)
 allowed_channel: "pim-management"
 admin_users:
-  - "volodymyr.l"
   - "admin.user"
 
 # Multi-Factor Authentication Configuration (OPTIONAL - for enhanced approval security)
@@ -42,6 +43,7 @@ allowed_email_domains:
 # totp_issuer          → AWSPIM_TOTP_ISSUER
 # mfa_storage_secret   → AWSPIM_MFA_STORAGE_SECRET or MFA_STORAGE_SECRET
 # allowed_email_domains → AWSPIM_ALLOWED_EMAIL_DOMAINS (comma-separated)
+# test_mode            → AWSPIM_TEST_MODE
 
 # Priority Order:
 # 1. Config file values (this file)

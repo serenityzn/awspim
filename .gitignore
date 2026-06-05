@@ -34,11 +34,17 @@ go.work.sum
 
 # Config files
 config.yaml
+config-prod.yaml
+config.yaml-prod
 config.json
 config.toml
 config.yml
 config.ini
 config.env
+
+# Binaries
+awspim
+pim-slack-bot
 
 # GoReleaser artifacts
 dist/

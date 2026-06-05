@@ -61,7 +61,7 @@ environment: "development"
 log_level: "info"
 allowed_channel: "pim-management"
 admin_users:
-  - "volodymyr.l"
+  - "admin.user"
 
 # Multi-Factor Authentication (MFA)
 require_multi_factor_auth: true
@@ -93,7 +93,7 @@ Create a secret containing AWS account information:
       "accountname": "Production Environment"
     },
     {
-      "accountid": "210987654321", 
+      "accountid": "222222222222",
       "accountname": "Development Environment"
     }
   ]

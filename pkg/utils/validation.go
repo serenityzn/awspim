@@ -12,8 +12,9 @@ var awsAccountIDRegex = regexp.MustCompile(`^\d{12}$`)
 
 // ValidateAWSAccountID checks if the provided string is a valid AWS account ID format
 func ValidateAWSAccountID(accountID string) bool {
-	// Remove any whitespace
+	// Remove whitespace and backticks (users often copy-paste from Slack code formatting)
 	accountID = strings.TrimSpace(accountID)
+	accountID = strings.Trim(accountID, "`")
 	
 	// Check if it matches the AWS account ID pattern (12 digits)
 	return awsAccountIDRegex.MatchString(accountID)

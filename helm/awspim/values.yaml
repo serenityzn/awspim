@@ -2,7 +2,7 @@
 # Image
 # ──────────────────────────────────────────────────────────────────────────────
 image:
-  repository: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-2.amazonaws.com/popaihealth-prod-pim
+  repository: YOUR_AWS_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/awspim
   tag: "latest"
   pullPolicy: IfNotPresent
 

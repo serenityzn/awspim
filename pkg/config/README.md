@@ -43,7 +43,7 @@ export LOG_LEVEL="info"
 - `environment` - App environment (default: `development`)
 - `log_level` - Logging level (default: `info`)
 - `allowed_channel` - Channel for PIM commands (default: `pim-management`)
-- `admin_users` - Users who can self-approve (default: `["volodymyr.l"]`)
+- `admin_users` - Users who can self-approve (default: `[]`)
 
 ## 🌍 Environment Variable Mapping
 

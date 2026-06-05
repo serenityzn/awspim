@@ -23,10 +23,22 @@ type AwsAccounts struct {
 
 // ApprovalMessage represents the structure of approval notification sent to SQS
 type ApprovalMessage struct {
-	Requestor string `json:"requestor"`
-	Approver  string `json:"approver"`
-	Account   string `json:"account"`
-	DateTime  string `json:"datetime"`
+	RequestID           string `json:"request_id"`
+	Requestor           string `json:"requestor"`
+	RequestorSlackUserID string `json:"requestor_slack_user_id"`
+	Approver            string `json:"approver"`
+	Account             string `json:"account"`
+	DateTime            string `json:"datetime"`
+}
+
+// ResponseMessage represents the result message the assigner sends back to awspim
+type ResponseMessage struct {
+	RequestID   string `json:"request_id"`
+	SlackUserID string `json:"slack_user_id"`
+	AccountID   string `json:"account_id"`
+	AccountName string `json:"account_name"`
+	Status      string `json:"status"` // "granted" | "revoked" | "rejected" | "failed"
+	Reason      string `json:"reason"`
 }
 
 // GetAccounts fetches AWS accounts using cached data for better performance
@@ -89,11 +101,12 @@ func GetAccountName(accountId string) string {
 }
 
 // SendApprovalNotification sends an approval message to the configured SQS queue using optimized connections
-func SendApprovalNotification(requestor, approver, accountID string) error {
+func SendApprovalNotification(requestID, requestor, requestorSlackUserID, approver, accountID string) error {
 	log := logger.GetDefaultLogger()
 	cfg := config.Get()
 
 	log.LogAWSOperation("send_approval_notification", logger.Fields{
+		"request_id": requestID,
 		"requestor":  utils.SanitizeUserInput(requestor),
 		"approver":   utils.SanitizeUserInput(approver),
 		"account_id": accountID,
@@ -123,10 +136,12 @@ func SendApprovalNotification(requestor, approver, accountID string) error {
 
 	// Create approval message
 	approvalMsg := ApprovalMessage{
-		Requestor: requestor,
-		Approver:  approver,
-		Account:   accountID,
-		DateTime:  time.Now().Format("2006-01-02 15:04"), // YYYY-MM-DD HH:MM format
+		RequestID:            requestID,
+		Requestor:            requestor,
+		RequestorSlackUserID: requestorSlackUserID,
+		Approver:             approver,
+		Account:              accountID,
+		DateTime:             time.Now().Format("2006-01-02 15:04"),
 	}
 
 	// Marshal message to JSON

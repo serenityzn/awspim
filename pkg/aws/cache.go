@@ -149,6 +149,7 @@ func (ac *AccountsCache) fetchAccountsFromSecretsManager() (*AwsAccounts, error)
 	return &awsAccounts, nil
 }
 
+
 // InvalidateCache clears the current cache, forcing a fresh fetch on next request
 func (ac *AccountsCache) InvalidateCache() {
 	ac.mutex.Lock()

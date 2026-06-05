@@ -1,7 +1,12 @@
 package slack
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"image/png"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +40,15 @@ type SlackClient struct {
 	client *slack.Client
 }
 
+// msgOpt returns a MsgOptionText for the given text, prepending a [TEST MODE]
+// banner when test_mode is enabled in the configuration.
+func msgOpt(text string) slack.MsgOption {
+	if config.Get().IsTestMode() {
+		text = "[TEST MODE] " + text
+	}
+	return slack.MsgOptionText(text, false)
+}
+
 // NewSlackClient creates a new Slack client
 func NewSlackClient() (*SlackClient, error) {
 	cfg := config.Get()
@@ -51,7 +65,7 @@ func NewSlackClient() (*SlackClient, error) {
 func (sc *SlackClient) SendMessage(channelName, message string) error {
 	// Try to send message directly to channel name (with # prefix)
 	channelRef := "#" + channelName
-	_, _, err := sc.client.PostMessage(channelRef, slack.MsgOptionText(message, false))
+	_, _, err := sc.client.PostMessage(channelRef, msgOpt(message))
 	if err != nil {
 		return fmt.Errorf("failed to send message to %s: %v", channelRef, err)
 	}
@@ -61,7 +75,7 @@ func (sc *SlackClient) SendMessage(channelName, message string) error {
 
 // SendMessageToUser sends a direct message to a user
 func (sc *SlackClient) SendMessageToUser(userID, message string) error {
-	_, _, err := sc.client.PostMessage(userID, slack.MsgOptionText(message, false))
+	_, _, err := sc.client.PostMessage(userID, msgOpt(message))
 	if err != nil {
 		return fmt.Errorf("failed to send DM: %v", err)
 	}
@@ -134,6 +148,18 @@ func StartSlackBot() error {
 	// Create handler
 	handler := NewHandler(client, authenticator)
 
+	// Start response poller — receives results from the assigner and DMs the requestor
+	pollerCtx, pollerCancel := context.WithCancel(context.Background())
+	defer pollerCancel()
+	awspkg.StartResponsePoller(pollerCtx, func(slackUserID, message string) {
+		_, _, err := client.PostMessage(slackUserID, msgOpt(message))
+		if err != nil {
+			log.LogSlackOperation("response_poller_notify", logger.Fields{
+				"slack_user_id": slackUserID,
+			}).WithError(err).Warn("Failed to DM user with assigner response")
+		}
+	})
+
 	// Handle events
 	go func() {
 		for evt := range socketClient.Events {
@@ -205,7 +231,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			// Acknowledge the command but send rate limit message
 			client.Ack(*evt.Request)
 			_, err := h.client.PostEphemeral(cmd.ChannelID, cmd.UserID, 
-				slack.MsgOptionText("⚠️ **Rate Limited**\n\nYou're sending commands too quickly. Please wait before trying again.", false))
+				msgOpt("⚠️ **Rate Limited**\n\nYou're sending commands too quickly. Please wait before trying again."))
 			if err != nil {
 				log.LogSlackOperation("send_rate_limit_message", logger.Fields{
 					"channel_id": cmd.ChannelID,
@@ -235,7 +261,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					"channel_id": cmd.ChannelID,
 					"user_id": cmd.UserID,
 				}).WithError(err).Error("Failed to get channel info")
-				h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText("Error: Could not verify channel information.", false))
+				h.client.PostMessage(cmd.ChannelID, msgOpt("Error: Could not verify channel information."))
 				return err
 			}
 
@@ -247,7 +273,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					"command": cmd.Command,
 				}).Warn("User attempted to use /pim command in unauthorized channel")
 				
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(fmt.Sprintf("This command can only be used in the #%s channel.", cfg.GetAllowedChannel()), false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(fmt.Sprintf("This command can only be used in the #%s channel.", cfg.GetAllowedChannel())))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send error message")
 					return err
@@ -255,8 +281,9 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				return nil
 			}
 
-			// Get the parameter provided after /pim command
-			parameter := cmd.Text
+			// Get the parameter provided after /pim command.
+			// Strip backticks and whitespace — users often copy-paste from /acc output.
+			parameter := strings.Trim(strings.TrimSpace(cmd.Text), "`")
 			var message string
 			
 			if parameter != "" {
@@ -294,7 +321,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					
 					// Send message with blocks instead of plain text
 					_, _, err = h.client.PostMessage(cmd.ChannelID, 
-						slack.MsgOptionText(requestText, false),
+						msgOpt(requestText),
 						slack.MsgOptionBlocks(
 							slack.NewSectionBlock(slack.NewTextBlockObject("mrkdwn", requestText, false, false), nil, nil),
 							actionBlock,
@@ -319,10 +346,10 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					message = fmt.Sprintf("❌ **Invalid Account ID**\n\nAccount ID `%s` is not found in our system.\n\nUse `/acc` to see available accounts.", utils.SanitizeUserInput(parameter))
 				}
 			} else {
-				message = "❌ **Missing Account ID**\n\nPlease provide an AWS Account ID.\n\nUsage: `/pim [account-id]`\nExample: `/pim 904924507160`\n\nUse `/acc` to see available accounts."
+				message = "❌ **Missing Account ID**\n\nPlease provide an AWS Account ID.\n\nUsage: `/pim [account-id]`\nExample: `/pim 123456789012`\n\nUse `/acc` to see available accounts."
 			}
 
-			_, _, err = h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+			_, _, err = h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 			if err != nil {
 				log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send message")
 				return err
@@ -341,7 +368,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			client.Ack(*evt.Request)
 
 			if h.authenticator == nil {
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText("❌ Multi-factor authentication is not enabled on this system.", false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt("❌ Multi-factor authentication is not enabled on this system."))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send MFA disabled message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -357,7 +384,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Error("Failed to get user info from Slack")
 				
 				message := "❌ **Profile Access Error**\n\nUnable to retrieve your Slack profile information. Please ensure the bot has permission to access user profiles."
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send profile error message")
 				}
@@ -373,7 +400,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).Warn("User has no email in Slack profile")
 				
 				message := "❌ **No Email Found**\n\nYour Slack profile doesn't have an email address configured. Please contact your Slack administrator to add an email to your profile."
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send no email message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -390,7 +417,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Warn("User has invalid email format in Slack profile")
 				
 				message := fmt.Sprintf("❌ **Invalid Email in Profile**\n\nYour Slack profile email `%s` is not a valid format. Please contact your Slack administrator to update your email address.", utils.SanitizeUserInput(email))
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send invalid email message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -406,7 +433,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			// Check if user is already registered
 			if h.authenticator.IsUserRegistered(cmd.UserID) {
 				message := "⚠️ **Already Registered**\n\nYou are already registered for multi-factor authentication.\n\nIf you need to re-register, please contact your administrator."
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send already registered message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -423,80 +450,95 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Error("Failed to start TOTP registration")
 				
 				message := fmt.Sprintf("❌ **Registration Failed**\n\nUnable to start TOTP registration for email `%s`. Please check your email domain is authorized and try again.", utils.SanitizeUserInput(email))
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send registration error message")
 				}
 				return nil
 			}
 
-			// Create registration completion modal
-			modalRequest := slack.ModalViewRequest{
-				Type: slack.VTModal,
-				Title: &slack.TextBlockObject{
-					Type: slack.PlainTextType,
-					Text: "Complete TOTP Setup",
+			// Open a DM conversation with the user to deliver the QR and verify button
+			dmChannel, _, _, openErr := h.client.OpenConversation(&slack.OpenConversationParameters{
+				Users: []string{cmd.UserID},
+			})
+			if openErr != nil {
+				log.LogSlackOperation("open_dm_conversation", logger.Fields{
+					"user_id": cmd.UserID,
+				}).WithError(openErr).Error("Failed to open DM conversation for TOTP registration")
+				_, _, _ = h.client.PostMessage(cmd.ChannelID, msgOpt("❌ **Setup Error**\n\nUnable to open a DM with you. Please ensure the bot is allowed to message you directly."))
+				return nil
+			}
+
+			// Generate QR code PNG and upload it to the DM
+			qrImg, qrErr := key.Image(300, 300)
+			if qrErr != nil {
+				log.LogSlackOperation("generate_qr_code", logger.Fields{
+					"user_id": cmd.UserID,
+				}).WithError(qrErr).Warn("Failed to generate TOTP QR code image")
+			} else {
+				var buf bytes.Buffer
+				if encErr := png.Encode(&buf, qrImg); encErr != nil {
+					log.LogSlackOperation("encode_qr_code", logger.Fields{
+						"user_id": cmd.UserID,
+					}).WithError(encErr).Warn("Failed to encode TOTP QR code as PNG")
+				} else {
+					_, uploadErr := h.client.UploadFileV2(slack.UploadFileV2Parameters{
+						Filename:       "totp-qr.png",
+						FileSize:       buf.Len(),
+						Reader:         &buf,
+						Channel:        dmChannel.ID,
+						Title:          "🔐 TOTP QR Code",
+						InitialComment: fmt.Sprintf("*Step 1 of 2 — Scan this QR code* with your authenticator app (Google Authenticator, Authy, Microsoft Authenticator, etc.)\n\n*Can't scan the QR?* Use the manual setup option instead:\n1. Open your authenticator app\n2. Tap *Add account* → *Enter setup key manually*\n3. Enter your email as the account name\n4. Paste this key: `%s`\n5. Make sure *Time-based* is selected, then save", key.Secret()),
+					})
+					if uploadErr != nil {
+						log.LogSlackOperation("upload_qr_code", logger.Fields{
+							"user_id": cmd.UserID,
+						}).WithError(uploadErr).Warn("Failed to upload TOTP QR code to DM")
+					}
+				}
+			}
+
+			// Send a follow-up message in the DM with the "Enter code" button.
+			// When clicked it opens a small modal ON TOP of this DM — the QR stays visible behind it.
+			verifyMsg := slack.MsgOptionBlocks(
+				&slack.SectionBlock{
+					Type: slack.MBTSection,
+					Text: &slack.TextBlockObject{
+						Type: slack.MarkdownType,
+						Text: "*Step 2 of 2 — Verify setup*\nAfter scanning the QR code above, click the button and enter the 6-digit code your app shows.",
+					},
 				},
-				Blocks: slack.Blocks{
-					BlockSet: []slack.Block{
-						&slack.SectionBlock{
-							Type: slack.MBTSection,
-							Text: &slack.TextBlockObject{
-								Type: slack.MarkdownType,
-								Text: fmt.Sprintf("📧 *Email:* %s\n\n📱 *Step 1:* Scan this QR code with your authenticator app:\n\n`%s`\n\n🔐 *Step 2:* Enter your first TOTP code below to verify setup:", utils.SanitizeUserInput(email), key.URL()),
-							},
-						},
-						&slack.InputBlock{
-							Type:    slack.MBTInput,
-							BlockID: "totp_code",
-							Label: &slack.TextBlockObject{
-								Type: slack.PlainTextType,
-								Text: "TOTP Code (6 digits)",
-							},
-							Element: &slack.PlainTextInputBlockElement{
-								Type:        slack.METPlainTextInput,
-								ActionID:    "totp_code_input",
-								Placeholder: &slack.TextBlockObject{
+				&slack.ActionBlock{
+					Type:    slack.MBTAction,
+					BlockID: "totp_verify_action",
+					Elements: &slack.BlockElements{
+						ElementSet: []slack.BlockElement{
+							&slack.ButtonBlockElement{
+								Type:     slack.METButton,
+								ActionID: "open_totp_verify_modal",
+								Text: &slack.TextBlockObject{
 									Type: slack.PlainTextType,
-									Text: "123456",
+									Text: "✅ Enter Verification Code",
 								},
-								MaxLength: 6,
-								MinLength: 6,
+								Style: slack.StylePrimary,
 							},
 						},
 					},
 				},
-				Submit: &slack.TextBlockObject{
-					Type: slack.PlainTextType,
-					Text: "Complete Setup",
-				},
-				Close: &slack.TextBlockObject{
-					Type: slack.PlainTextType,
-					Text: "Cancel",
-				},
-				CallbackID:     "complete_totp_registration",
-				ClearOnClose:   true,
-				NotifyOnClose:  false,
-			}
-
-			_, err = h.client.OpenView(cmd.TriggerID, modalRequest)
+			)
+			_, _, err = h.client.PostMessage(dmChannel.ID, verifyMsg)
 			if err != nil {
-				log.LogSlackOperation("open_registration_modal", logger.Fields{
+				log.LogSlackOperation("send_verify_button", logger.Fields{
 					"user_id": cmd.UserID,
-					"trigger_id": cmd.TriggerID,
-				}).WithError(err).Error("Failed to open TOTP registration modal")
-				
-				message := "❌ **Modal Error**\n\nUnable to open registration modal. Please try the command again."
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
-				if msgErr != nil {
-					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send modal error message")
-				}
-				return nil
+				}).WithError(err).Error("Failed to send TOTP verify button to DM")
 			}
 
-			log.LogUserAction(cmd.UserID, "totp_registration_modal_opened", logger.Fields{
+			// Acknowledge in the channel that a DM was sent
+			_, _, _ = h.client.PostMessage(cmd.ChannelID, msgOpt(fmt.Sprintf("📩 <@%s> Check your DMs — QR code and setup instructions have been sent to you privately.", cmd.UserID)))
+
+			log.LogUserAction(cmd.UserID, "totp_registration_dm_sent", logger.Fields{
 				"email": utils.SanitizeUserInput(email),
-			}).Info("TOTP registration modal opened successfully")
+			}).Info("TOTP registration QR and verify button sent via DM")
 		}
 
 		// Handle /verify-approval command for MFA
@@ -512,7 +554,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			// Check if MFA is enabled
 			if h.authenticator == nil || !cfg.IsRequireMultiFactorAuth() {
 				message := "❌ **MFA Not Enabled**\n\nMulti-factor authentication is not enabled on this system."
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send MFA disabled message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -524,7 +566,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			params := strings.Fields(cmd.Text)
 			if len(params) != 2 {
 				message := "❌ **Invalid Usage**\n\nUsage: `/verify-approval <email-code> <totp-code>`\n\nExample: `/verify-approval 123456 654321`"
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send usage message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -538,7 +580,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			// Validate codes format
 			if len(emailCode) != 6 || len(totpCode) != 6 {
 				message := "❌ **Invalid Code Format**\n\nBoth email and TOTP codes must be exactly 6 digits."
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send invalid format message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -549,7 +591,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			// Check if user has pending verification
 			if !h.authenticator.IsVerificationPending(cmd.UserID) {
 				message := "❌ **No Pending Verification**\n\nYou don't have any pending approval verification. Please click an approval button first."
-				_, _, err := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if err != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send no pending message")
 					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -566,7 +608,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Error("Approval verification failed via command")
 
 				message := "❌ **Verification Failed**\n\nInvalid email or TOTP code. Please check your codes and try again."
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send verification failure message")
 				}
@@ -591,7 +633,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Error("Failed to get requestor email for MFA verification")
 				
 				message := "❌ **Processing Failed**\n\nUnable to retrieve requestor email address. Please contact administrator."
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_error_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send error message")
 				}
@@ -605,7 +647,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Error("Failed to get approver email for MFA verification")
 				
 				message := "❌ **Processing Failed**\n\nUnable to retrieve your email address. Please contact administrator."
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_error_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send error message")
 				}
@@ -641,7 +683,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				}).WithError(err).Error("Failed to process approval after MFA verification")
 				
 				message := "❌ **Processing Failed**\n\nVerification successful but approval processing failed. Please contact administrator."
-				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send processing error message")
 				}
@@ -655,7 +697,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				utils.SanitizeUserInput(requestorUsername), 
 				utils.SanitizeUserInput(approverUsername))
 			
-			_, _, err = h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+			_, _, err = h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 			if err != nil {
 				log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send verification success message")
 				return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
@@ -699,7 +741,7 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 			message = "❌ No AWS accounts configured."
 		}
 
-			_, _, err = h.client.PostMessage(cmd.ChannelID, slack.MsgOptionText(message, false))
+			_, _, err = h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 			if err != nil {
 				log.LogSlackOperation("send_accounts_list", logger.Fields{
 					"channel_id": cmd.ChannelID,
@@ -735,6 +777,11 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 				if action.ActionID == "open_mfa_modal" {
 					// Handle the "Open Verification Form" button click
 					return h.handleMFAModalTrigger(action, interaction, client, evt)
+				}
+
+				if action.ActionID == "open_totp_verify_modal" {
+					client.Ack(*evt.Request)
+					return h.handleOpenTOTPVerifyModal(interaction, client, evt)
 				}
 				
 				if action.ActionID == "approve_access" || action.ActionID == "deny_access" {
@@ -780,7 +827,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 						_, err := h.client.PostEphemeral(
 							interaction.Channel.ID,
 							approverUserID,
-							slack.MsgOptionText("❌ *Self-Approval Not Allowed*\n\nYou cannot approve or deny your own access request. Another user must handle this request.", false),
+							msgOpt("❌ *Self-Approval Not Allowed*\n\nYou cannot approve or deny your own access request. Another user must handle this request."),
 						)
 						if err != nil {
 							log.LogSlackOperation("send_ephemeral", logger.Fields{"channel_id": interaction.Channel.ID}).WithError(err).Error("Failed to send ephemeral message")
@@ -813,7 +860,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 							_, err := h.client.PostEphemeral(
 								interaction.Channel.ID,
 								approverUserID,
-								slack.MsgOptionText("⚠️ **Already Processed**\n\nThis approval request has already been processed. No further action is needed.", false),
+								msgOpt("⚠️ **Already Processed**\n\nThis approval request has already been processed. No further action is needed."),
 							)
 							if err != nil {
 								log.LogSlackOperation("send_duplicate_warning", logger.Fields{"channel_id": interaction.Channel.ID}).WithError(err).Error("Failed to send duplicate approval warning")
@@ -896,7 +943,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 								_, err = h.client.PostEphemeral(
 									interaction.Channel.ID,
 									approverUserID,
-									slack.MsgOptionText(fallbackText, false),
+									msgOpt(fallbackText),
 									slack.MsgOptionBlocks(blocks...),
 								)
 								if err != nil {
@@ -920,7 +967,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 								_, err := h.client.PostEphemeral(
 									interaction.Channel.ID,
 									approverUserID,
-									slack.MsgOptionText("❌ **MFA Registration Required**\n\nYou must register for multi-factor authentication before approving requests.\n\nUse `/register-totp` to get started.", false),
+									msgOpt("❌ **MFA Registration Required**\n\nYou must register for multi-factor authentication before approving requests.\n\nUse `/register-totp` to get started."),
 								)
 								if err != nil {
 									log.LogSlackOperation("send_mfa_required_message", logger.Fields{"channel_id": interaction.Channel.ID}).WithError(err).Error("Failed to send MFA required message")
@@ -984,7 +1031,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 							_, err := h.client.PostEphemeral(
 								interaction.Channel.ID,
 								approverUserID,
-								slack.MsgOptionText("⚠️ **Already Processed**\n\nThis request has already been processed. No further action is needed.", false),
+								msgOpt("⚠️ **Already Processed**\n\nThis request has already been processed. No further action is needed."),
 							)
 							if err != nil {
 								log.LogSlackOperation("send_duplicate_warning", logger.Fields{"channel_id": interaction.Channel.ID}).WithError(err).Error("Failed to send duplicate denial warning")
@@ -1117,7 +1164,7 @@ func (h *handler) handleTOTPRegistrationCompletion(interaction slack.Interaction
 
 		// Send failure message to user
 		message := "❌ **Registration Failed**\n\nInvalid TOTP code. Please try `/register-totp` again and ensure you're using the correct authenticator app."
-		_, _, msgErr := h.client.PostMessage(interaction.User.ID, slack.MsgOptionText(message, false))
+		_, _, msgErr := h.client.PostMessage(interaction.User.ID, msgOpt(message))
 		if msgErr != nil {
 			log.LogSlackOperation("send_dm", logger.Fields{
 				"user_id": interaction.User.ID,
@@ -1161,7 +1208,7 @@ func (h *handler) handleTOTPRegistrationCompletion(interaction slack.Interaction
 		utils.SanitizeUserInput(user.Email), 
 		backupCodesText)
 
-	_, _, err = h.client.PostMessage(interaction.User.ID, slack.MsgOptionText(successMessage, false))
+	_, _, err = h.client.PostMessage(interaction.User.ID, msgOpt(successMessage))
 	if err != nil {
 		log.LogSlackOperation("send_success_dm", logger.Fields{
 			"user_id": interaction.User.ID,
@@ -1242,7 +1289,7 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 
 		// Send failure message
 		message := "❌ **Verification Failed**\n\nInvalid email or TOTP code. Please try the approval again."
-		_, _, msgErr := h.client.PostMessage(interaction.User.ID, slack.MsgOptionText(message, false))
+		_, _, msgErr := h.client.PostMessage(interaction.User.ID, msgOpt(message))
 		if msgErr != nil {
 			log.LogSlackOperation("send_verification_failure_dm", logger.Fields{
 				"user_id": interaction.User.ID,
@@ -1288,7 +1335,7 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 		_, _, _, updateErr := h.client.UpdateMessage(
 			channelID,
 			messageTimestamp,
-			slack.MsgOptionText(completedText, false),
+			msgOpt(completedText),
 			// No buttons - message is now completed
 		)
 		if updateErr != nil {
@@ -1323,6 +1370,15 @@ func (h *handler) getUserEmail(userID string) (string, error) {
 	return email, nil
 }
 
+// generateRequestID creates a short random hex ID for correlating SQS request/response pairs.
+func generateRequestID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
 func (h *handler) processApproval(requestedUserID, requestorEmail, accountID, accountName, approverUserID, approverEmail string) error {
 	log := logger.GetDefaultLogger()
 
@@ -1333,12 +1389,16 @@ func (h *handler) processApproval(requestedUserID, requestorEmail, accountID, ac
 		"approver_email": approverEmail,
 	}).Info("Access request approved")
 
-	// Send approval notification using email addresses
-	if err := awspkg.SendApprovalNotification(requestorEmail, approverEmail, accountID); err != nil {
+	requestID := generateRequestID()
+
+	// Send approval notification — include request ID and requestor's Slack user ID
+	// so the assigner can echo them back in the response queue message.
+	if err := awspkg.SendApprovalNotification(requestID, requestorEmail, requestedUserID, approverEmail, accountID); err != nil {
 		log.LogSlackOperation("send_sqs_notification", logger.Fields{
-			"account_id": accountID,
+			"request_id":      requestID,
+			"account_id":      accountID,
 			"requestor_email": requestorEmail,
-			"approver_email": approverEmail,
+			"approver_email":  approverEmail,
 		}).WithError(err).Error("Failed to send SQS approval notification")
 	}
 
@@ -1348,7 +1408,7 @@ func (h *handler) processApproval(requestedUserID, requestorEmail, accountID, ac
 		utils.SanitizeUserInput(requestorEmail),
 		utils.SanitizeUserInput(approverEmail))
 
-	_, _, err := h.client.PostMessage(requestedUserID, slack.MsgOptionText(approvalMessage, false))
+	_, _, err := h.client.PostMessage(requestedUserID, msgOpt(approvalMessage))
 	if err != nil {
 		log.LogSlackOperation("send_approval_dm", logger.Fields{
 			"user_id": requestedUserID,
@@ -1381,6 +1441,68 @@ func (h *handler) startApprovalCleanup() {
 			}).Info("Cleaned up processed approvals cache")
 		}
 	}
+}
+
+// handleOpenTOTPVerifyModal opens the 6-digit code entry modal when the user clicks
+// the "Enter Verification Code" button sent to their DM during registration.
+func (h *handler) handleOpenTOTPVerifyModal(interaction slack.InteractionCallback, client *socketmode.Client, evt *socketmode.Event) error {
+	log := logger.GetDefaultLogger()
+
+	modalRequest := slack.ModalViewRequest{
+		Type: slack.VTModal,
+		Title: &slack.TextBlockObject{
+			Type: slack.PlainTextType,
+			Text: "Verify TOTP Setup",
+		},
+		Blocks: slack.Blocks{
+			BlockSet: []slack.Block{
+				&slack.SectionBlock{
+					Type: slack.MBTSection,
+					Text: &slack.TextBlockObject{
+						Type: slack.MarkdownType,
+						Text: "Enter the 6-digit code shown in your authenticator app to complete setup.",
+					},
+				},
+				&slack.InputBlock{
+					Type:    slack.MBTInput,
+					BlockID: "totp_code",
+					Label: &slack.TextBlockObject{
+						Type: slack.PlainTextType,
+						Text: "TOTP Code (6 digits)",
+					},
+					Element: &slack.PlainTextInputBlockElement{
+						Type:     slack.METPlainTextInput,
+						ActionID: "totp_code_input",
+						Placeholder: &slack.TextBlockObject{
+							Type: slack.PlainTextType,
+							Text: "123456",
+						},
+						MaxLength: 6,
+						MinLength: 6,
+					},
+				},
+			},
+		},
+		Submit: &slack.TextBlockObject{
+			Type: slack.PlainTextType,
+			Text: "Verify & Complete",
+		},
+		Close: &slack.TextBlockObject{
+			Type: slack.PlainTextType,
+			Text: "Cancel",
+		},
+		CallbackID:   "complete_totp_registration",
+		ClearOnClose: true,
+	}
+
+	_, err := h.client.OpenView(interaction.TriggerID, modalRequest)
+	if err != nil {
+		log.LogSlackOperation("open_totp_verify_modal", logger.Fields{
+			"user_id": interaction.User.ID,
+		}).WithError(err).Error("Failed to open TOTP verify modal")
+		_, _, _ = h.client.PostMessage(interaction.User.ID, msgOpt("❌ Unable to open verification form. Please try `/register-totp` again."))
+	}
+	return nil
 }
 
 // handleMFAModalTrigger handles the "Open Verification Form" button click to show modal  
@@ -1488,7 +1610,7 @@ func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction s
 		_, msgErr := h.client.PostEphemeral(
 			interaction.Channel.ID,
 			interaction.User.ID,
-			slack.MsgOptionText(fallbackMessage, false),
+			msgOpt(fallbackMessage),
 		)
 		if msgErr != nil {
 			log.LogSlackOperation("send_modal_fallback", logger.Fields{

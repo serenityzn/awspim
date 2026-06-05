@@ -34,6 +34,12 @@ type Config struct {
 	RequireMultiFactorAuth bool     `mapstructure:"require_multi_factor_auth"`
 	TOTPIssuer             string   `mapstructure:"totp_issuer"`
 	MFAStorageSecret       string   `mapstructure:"mfa_storage_secret"` // Secrets Manager secret name for storing user 2FA registrations
+
+	// Response queue — assigner sends results back here
+	ResponseSQSURL string `mapstructure:"response_sqs_url"`
+
+	// Testing
+	TestMode bool `mapstructure:"test_mode"`
 }
 
 var (
@@ -71,6 +77,8 @@ func Load() (*Config, error) {
 	v.BindEnv("totp_issuer", "AWSPIM_TOTP_ISSUER")
 	v.BindEnv("allowed_email_domains", "AWSPIM_ALLOWED_EMAIL_DOMAINS")
 	v.BindEnv("mfa_storage_secret", "AWSPIM_MFA_STORAGE_SECRET", "MFA_STORAGE_SECRET")
+	v.BindEnv("response_sqs_url", "AWSPIM_RESPONSE_SQS_URL", "RESPONSE_SQS_URL")
+	v.BindEnv("test_mode", "AWSPIM_TEST_MODE")
 	
 	// Set defaults
 	setDefaults(v)
@@ -127,13 +135,14 @@ func setDefaults(v *viper.Viper) {
 	
 	// Security defaults
 	v.SetDefault("allowed_channel", "pim-management")
-	v.SetDefault("admin_users", []string{"volodymyr.l"})
+	v.SetDefault("admin_users", []string{})
 	
 	// Multi-factor authentication defaults
 	v.SetDefault("require_multi_factor_auth", false)
 	v.SetDefault("allowed_email_domains", []string{"company.com"})
 	v.SetDefault("totp_issuer", "AWS PIM")
 	v.SetDefault("mfa_storage_secret", "pim/mfa-registrations")
+	v.SetDefault("test_mode", false)
 }
 
 // validateConfig validates that all required configuration is present
@@ -246,6 +255,16 @@ func (c *Config) GetTOTPIssuer() string {
 // GetMFAStorageSecret returns the Secrets Manager secret name for MFA storage
 func (c *Config) GetMFAStorageSecret() string {
 	return c.MFAStorageSecret
+}
+
+// GetResponseSQSURL returns the SQS URL for receiving results from the assigner
+func (c *Config) GetResponseSQSURL() string {
+	return c.ResponseSQSURL
+}
+
+// IsTestMode returns whether test mode is enabled
+func (c *Config) IsTestMode() bool {
+	return c.TestMode
 }
 
 // IsAllowedEmailDomain checks if an email domain is allowed

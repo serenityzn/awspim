@@ -355,4 +355,3 @@ go test ./pkg/auth/...
 - ✅ Set up alerts for high error rates
 - ✅ Track `last_used_at` for inactive users
 - ✅ Review CloudTrail logs regularly
-
