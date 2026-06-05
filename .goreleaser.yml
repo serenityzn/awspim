@@ -2,9 +2,7 @@ version: 2
 
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
-    # You may remove this if you don't need to generate anything.
     - go mod download
 
 builds:
@@ -43,6 +41,53 @@ archives:
     files:
       - README.md
       - LICENSE
+
+dockers:
+  - id: awspim-amd64
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/serenityzn/awspim:{{ .Tag }}-amd64"
+      - "ghcr.io/serenityzn/awspim:latest-amd64"
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title=awspim"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source=https://github.com/serenityzn/awspim"
+    extra_files:
+      - ca-certificates.crt
+
+  - id: awspim-arm64
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "ghcr.io/serenityzn/awspim:{{ .Tag }}-arm64"
+      - "ghcr.io/serenityzn/awspim:latest-arm64"
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=awspim"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source=https://github.com/serenityzn/awspim"
+    extra_files:
+      - ca-certificates.crt
+
+docker_manifests:
+  - name_template: "ghcr.io/serenityzn/awspim:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/serenityzn/awspim:{{ .Tag }}-amd64"
+      - "ghcr.io/serenityzn/awspim:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/serenityzn/awspim:latest"
+    image_templates:
+      - "ghcr.io/serenityzn/awspim:latest-amd64"
+      - "ghcr.io/serenityzn/awspim:latest-arm64"
 
 checksum:
   name_template: 'checksums.txt'
@@ -92,11 +137,6 @@ release:
     ## Installation
     
     Download the appropriate binary for your platform from the assets below.
-    
-    ### Docker
-    ```bash
-    docker pull ghcr.io/serenityzn/awspim:{{ .Tag }}
-    ```
     
     ### Verification
     You can verify the integrity of downloaded files using the checksums.txt file.
