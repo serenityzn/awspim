@@ -103,6 +103,10 @@ response_sqs_url: "https://sqs.us-east-2.amazonaws.com/123456789012/pim-response
 require_multi_factor_auth: true
 ses_from_email: "noreply@yourdomain.com"
 email_template_name: "PIM-MFA-Template"
+totp_issuer: "AWS PIM"
+mfa_storage_secret: "pim/mfa-registrations"  # Secrets Manager secret for storing user TOTP registrations
+allowed_email_domains:
+  - "company.com"
 ```
 
 ### Environment Variable Mapping
@@ -117,11 +121,15 @@ email_template_name: "PIM-MFA-Template"
 | `require_multi_factor_auth` | `REQUIRE_MULTI_FACTOR_AUTH` or `AWSPIM_REQUIRE_MULTI_FACTOR_AUTH` |
 | `ses_from_email` | `SES_FROM_EMAIL` or `AWSPIM_SES_FROM_EMAIL` |
 | `email_template_name` | `EMAIL_TEMPLATE_NAME` or `AWSPIM_EMAIL_TEMPLATE_NAME` |
+| `mfa_storage_secret` | `MFA_STORAGE_SECRET` or `AWSPIM_MFA_STORAGE_SECRET` |
+| `allowed_email_domains` | `AWSPIM_ALLOWED_EMAIL_DOMAINS` (comma-separated) |
+| `totp_issuer` | `AWSPIM_TOTP_ISSUER` |
 
 ## 🔐 AWS Setup
 
-### 1. Secrets Manager Secret
-Create a secret containing AWS account information:
+### 1. Secrets Manager Secrets
+
+**AWS Accounts secret** (`aws_accounts_secret`, default: `pim/aws-accounts`) — list of AWS accounts users can request access to:
 ```json
 {
   "accounts": [
@@ -135,6 +143,11 @@ Create a secret containing AWS account information:
     }
   ]
 }
+```
+
+**MFA registrations secret** (`mfa_storage_secret`, default: `pim/mfa-registrations`) — stores user TOTP keys. Created automatically by `awspim` when users register via `/register-totp`. Structure managed internally; you only need to create an empty secret with this name:
+```json
+{}
 ```
 
 ### 2. SQS Queues
@@ -336,6 +349,14 @@ Create these slash commands:
    - TOTP codes expire in 30 seconds (standard TOTP window)
    - Duplicate approval prevention
    - All approval actions are logged with full context
+
+### Who Can Approve
+
+`awspim` enforces one rule locally: **users cannot approve their own requests** (unless listed in `admin_users`).
+
+The authoritative list of allowed approvers **per account** is managed by [awspim-manager](https://github.com/serenityzn/awspim-manager). If someone clicks Approve but is not on the allowed approvers list for that account, `awspim-manager` rejects the request and `awspim` DMs the requestor with the rejection reason.
+
+To grant someone approval rights for an account, configure it in `awspim-manager`.
 
 ### Security Features
 - **Multi-Factor Authentication**: TOTP + Email verification for approvers
