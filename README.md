@@ -2,6 +2,36 @@
 
 A Slack bot for managing AWS Privileged Identity Management (PIM) access requests with approval workflows.
 
+## 🏛️ System Architecture
+
+AWS PIM is a **two-component system**. Both components must be deployed and connected for the full workflow to function:
+
+| Component | Repository | Role |
+|-----------|-----------|------|
+| **awspim** (this repo) | [github.com/serenityzn/awspim](https://github.com/serenityzn/awspim) | Slack bot — handles user interaction, approval UI, MFA, and SQS communication |
+| **awspim-manager** | [github.com/serenityzn/awspim-manager](https://github.com/serenityzn/awspim-manager) | Backend assigner — processes approval requests, manages AWS Identity Center permissions, and sends results back |
+
+### How they communicate
+
+```
+User (Slack)
+    │  /pim <account-id>
+    ▼
+awspim (this repo)
+    │  sends approval message to SQS request queue
+    ▼
+awspim-manager
+    │  assigns / revokes AWS SSO permissions
+    │  sends result to SQS response queue
+    ▼
+awspim (this repo)
+    │  polls response queue, DMs user with result
+    ▼
+User (Slack DM): "✅ Access Granted"
+```
+
+Both components communicate exclusively via **two AWS SQS queues** — no direct network connection is required between them.
+
 ## 🚀 Quick Start
 
 1. **Configuration Setup:**
@@ -49,7 +79,7 @@ The app searches for `config.yaml` in:
 slack_bot_token: "xoxb-your-slack-bot-token"
 slack_app_token: "xapp-your-slack-app-token"
 
-# AWS Configuration  
+# AWS Configuration
 manager_sqs_arn: "arn:aws:sqs:us-east-2:123456789012:pim-queue"
 ```
 
@@ -63,6 +93,11 @@ allowed_channel: "pim-management"
 admin_users:
   - "admin.user"
 
+# Response queue — enables DM notifications when awspim-manager processes a request.
+# If omitted, the poller is disabled and users won't receive status updates via DM.
+# See: https://github.com/serenityzn/awspim-manager
+response_sqs_url: "https://sqs.us-east-2:123456789012:pim-response-queue"
+
 # Multi-Factor Authentication (MFA)
 require_multi_factor_auth: true
 ses_from_email: "noreply@yourdomain.com"
@@ -75,6 +110,7 @@ email_template_name: "PIM-MFA-Template"
 | `slack_bot_token` | `SLACK_BOT_TOKEN` or `AWSPIM_SLACK_BOT_TOKEN` |
 | `slack_app_token` | `SLACK_APP_TOKEN` or `AWSPIM_SLACK_APP_TOKEN` |
 | `manager_sqs_arn` | `MANAGER_SQS_ARN` or `AWSPIM_MANAGER_SQS_ARN` |
+| `response_sqs_url` | `RESPONSE_SQS_URL` or `AWSPIM_RESPONSE_SQS_URL` |
 | `aws_region` | `AWS_REGION` or `AWSPIM_AWS_REGION` |
 | `aws_accounts_secret` | `AWS_ACCOUNTS_SECRET` or `AWSPIM_AWS_ACCOUNTS_SECRET` |
 | `require_multi_factor_auth` | `REQUIRE_MULTI_FACTOR_AUTH` or `AWSPIM_REQUIRE_MULTI_FACTOR_AUTH` |
@@ -100,16 +136,34 @@ Create a secret containing AWS account information:
 }
 ```
 
-### 2. SQS Queue
-Create an SQS queue for approval notifications. The application will send messages with this structure:
+### 2. SQS Queues
+Create **two** SQS queues:
+
+**Request queue** (`manager_sqs_arn`) — `awspim` sends approval requests here for `awspim-manager` to process:
 ```json
 {
+  "request_id": "abc-123",
   "requestor": "username",
-  "approver": "approver_username", 
+  "requestor_slack_user_id": "U1234567890",
+  "approver": "approver_username",
   "account": "123456789012",
   "datetime": "2024-01-15 14:30"
 }
 ```
+
+**Response queue** (`response_sqs_url`) — `awspim-manager` sends results here; `awspim` polls it and DMs the user:
+```json
+{
+  "request_id": "abc-123",
+  "slack_user_id": "U1234567890",
+  "account_id": "123456789012",
+  "account_name": "Production Environment",
+  "status": "granted",
+  "reason": ""
+}
+```
+
+Possible `status` values: `granted`, `revoked`, `rejected`, `failed`.
 
 ### 3. SES Email Template (for MFA)
 Create an SES email template for multi-factor authentication:
@@ -184,8 +238,9 @@ This is an automated message from AWS PIM Management System
 
 ### 4. IAM Permissions
 The application needs:
-- `secretsmanager:GetSecretValue` on the accounts secret
-- `sqs:SendMessage` on the notification queue
+- `secretsmanager:GetSecretValue` on the accounts secret and MFA storage secret
+- `sqs:SendMessage` on the request queue (`manager_sqs_arn`)
+- `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` on the response queue (`response_sqs_url`)
 - `ses:SendTemplatedEmail` for MFA email notifications
 - `ses:SendEmail` for MFA email notifications (if using simple emails)
 
@@ -251,8 +306,9 @@ Create these slash commands:
 1. User runs `/pim [account-id]` in `#pim-management` channel
 2. Bot validates account ID and posts approval request with buttons
 3. Another user clicks "✅ Approve Access" or "❌ Deny Access"
-4. Bot updates message and sends SQS notification
-5. External system processes the approval
+4. Bot updates message and sends SQS message to request queue
+5. [awspim-manager](https://github.com/serenityzn/awspim-manager) processes the request and posts result to response queue
+6. `awspim` response poller picks up the result and DMs the requesting user
 
 #### Multi-Factor Authentication Workflow
 1. **First-time setup**: Approver runs `/register-totp` to set up MFA
@@ -351,6 +407,8 @@ Configure via `LOG_LEVEL` environment variable:
 - **pkg/aws** - AWS integrations (Secrets Manager, SQS, SES)
   - **session.go** - AWS session manager with connection reuse
   - **cache.go** - Intelligent caching for AWS accounts data
+  - **aws.go** - SQS approval message sending
+  - **response_poller.go** - Background poller for SQS response queue; DMs users with results from [awspim-manager](https://github.com/serenityzn/awspim-manager)
 - **pkg/slack** - Slack bot implementation
   - **rate_limiter.go** - Rate limiting and spam protection
 - **pkg/auth** - Multi-factor authentication system
@@ -482,7 +540,7 @@ go run main.go
 
 ## 📄 License
 
-[GNU General Public License v3.0]
+[GNU General Public License v3.0](LICENSE)
 
 ## 🤝 Contributing
 
