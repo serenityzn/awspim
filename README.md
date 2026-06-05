@@ -352,11 +352,11 @@ Create these slash commands:
 
 ### Who Can Approve
 
-`awspim` enforces one rule locally: **users cannot approve their own requests** (unless listed in `admin_users`).
+Any member of the configured Slack channel (`allowed_channel`) can click the Approve or Deny button. `awspim` enforces only one rule locally: **users cannot approve their own requests** (unless listed in `admin_users`).
 
-The authoritative list of allowed approvers **per account** is managed by [awspim-manager](https://github.com/serenityzn/awspim-manager). If someone clicks Approve but is not on the allowed approvers list for that account, `awspim-manager` rejects the request and `awspim` DMs the requestor with the rejection reason.
+The authoritative per-account approver allowlist is managed entirely by [awspim-manager](https://github.com/serenityzn/awspim-manager). If someone clicks Approve but is not authorized for that account, the lambda rejects the request and `awspim` DMs the requestor with the reason. This is intentional — keeping the approver list in one place (the lambda) avoids duplication and allows per-account granularity without redeploying `awspim`.
 
-To grant someone approval rights for an account, configure it in `awspim-manager`.
+To grant or revoke approval rights for an account, configure it in `awspim-manager`.
 
 ### Security Features
 - **Multi-Factor Authentication**: TOTP + Email verification for approvers
