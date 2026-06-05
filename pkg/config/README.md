@@ -22,7 +22,7 @@ vim config.yaml
 # Required variables
 export SLACK_BOT_TOKEN="xoxb-your-token"
 export SLACK_APP_TOKEN="xapp-your-token"  
-export MANAGER_SQS_ARN="arn:aws:sqs:region:account:queue"
+export MANAGER_SQS_ARN="https://sqs.us-east-2.amazonaws.com/123456789012/pim-queue"
 
 # Optional variables (have defaults)
 export AWS_REGION="us-east-2"
@@ -74,7 +74,7 @@ The application supports both prefixed and non-prefixed environment variables:
    ```bash
    export SLACK_BOT_TOKEN="xoxb-your-token"
    export SLACK_APP_TOKEN="xapp-your-token"
-   export MANAGER_SQS_ARN="arn:aws:sqs:us-east-2:123456789012:queue"
+   export MANAGER_SQS_ARN="https://sqs.us-east-2.amazonaws.com/123456789012/pim-queue"
    go run main.go
    ```
 

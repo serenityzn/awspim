@@ -5,7 +5,7 @@ slack_app_token: "xapp-your-slack-app-token-here"
 # AWS Configuration (REQUIRED)
 aws_region: "us-east-2"
 aws_accounts_secret: "pim/aws-accounts"
-manager_sqs_arn: "arn:aws:sqs:us-east-2:123456789012:pim-management-queue"
+manager_sqs_arn: "https://sqs.us-east-2.amazonaws.com/123456789012/pim-queue"
 response_sqs_url: ""  # Optional: SQS URL where the assigner sends results back (e.g. https://sqs.us-east-2.amazonaws.com/123456789012/PIM-Response)
 
 # Application Configuration (OPTIONAL)

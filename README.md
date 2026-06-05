@@ -43,8 +43,8 @@ Both components communicate exclusively via **two AWS SQS queues** — no direct
    # Option 2: Environment variables
    export SLACK_BOT_TOKEN="xoxb-your-token"
    export SLACK_APP_TOKEN="xapp-your-token"  
-   export MANAGER_SQS_ARN="arn:aws:sqs:region:account:queue"
-   export RESPONSE_SQS_URL="https://sqs.region.amazonaws.com/account/response-queue"
+   export MANAGER_SQS_ARN="https://sqs.us-east-2.amazonaws.com/123456789012/pim-queue"
+   export RESPONSE_SQS_URL="https://sqs.us-east-2.amazonaws.com/123456789012/pim-response-queue"
    ```
 
 2. **Run the application:**
@@ -81,7 +81,7 @@ slack_bot_token: "xoxb-your-slack-bot-token"
 slack_app_token: "xapp-your-slack-app-token"
 
 # AWS Configuration
-manager_sqs_arn: "arn:aws:sqs:us-east-2:123456789012:pim-queue"
+manager_sqs_arn: "https://sqs.us-east-2.amazonaws.com/123456789012/pim-queue"
 ```
 
 ### Optional Settings (with defaults)
@@ -97,7 +97,7 @@ admin_users:
 # Response queue — enables DM notifications when awspim-manager processes a request.
 # If omitted, the poller is disabled and users won't receive status updates via DM.
 # See: https://github.com/serenityzn/awspim-manager
-response_sqs_url: "https://sqs.us-east-2:123456789012:pim-response-queue"
+response_sqs_url: "https://sqs.us-east-2.amazonaws.com/123456789012/pim-response-queue"
 
 # Multi-Factor Authentication (MFA)
 require_multi_factor_auth: true
@@ -480,7 +480,7 @@ curl localhost:8080/health/aws  # (if health endpoint implemented)
 ```bash
 export SLACK_BOT_TOKEN="xoxb-your-dev-token"
 export SLACK_APP_TOKEN="xapp-your-dev-token"
-export MANAGER_SQS_ARN="arn:aws:sqs:us-east-2:123456789012:dev-queue"
+export MANAGER_SQS_ARN="https://sqs.us-east-2.amazonaws.com/123456789012/pim-queue"
 export LOG_LEVEL="debug"
 go run main.go
 ```
