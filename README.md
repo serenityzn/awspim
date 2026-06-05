@@ -251,12 +251,17 @@ This is an automated message from AWS PIM Management System
 ```
 
 ### 4. IAM Permissions
-The application needs:
-- `secretsmanager:GetSecretValue` on the accounts secret and MFA storage secret
+
+The `awspim` process must run with an IAM role that has the following permissions:
+
+- `secretsmanager:GetSecretValue`, `secretsmanager:PutSecretValue`, `secretsmanager:UpdateSecret` on the accounts and MFA storage secrets
 - `sqs:SendMessage` on the request queue (`manager_sqs_arn`)
 - `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` on the response queue (`response_sqs_url`)
-- `ses:SendTemplatedEmail` for MFA email notifications
-- `ses:SendEmail` for MFA email notifications (if using simple emails)
+- `ses:SendEmail`, `ses:SendTemplatedEmail` for MFA verification emails
+
+**If using Terraform** (recommended): the `terraform/` directory creates this role automatically (`awspim_role_arn` output). Attach it to the EC2 instance, ECS task, or compute running `awspim`.
+
+**If managing IAM manually**: create a role with the permissions above and attach it to your compute. The exact policy document is in `terraform/iam.tf` as `aws_iam_policy_document.awspim_permissions`.
 
 ## 📱 Slack Setup
 
@@ -419,6 +424,36 @@ Configure via `LOG_LEVEL` environment variable:
   - Backup code usage
   - MFA bypass attempts
   - Duplicate approval prevention
+
+## 🌍 Terraform
+
+The `terraform/` directory contains ready-to-use Terraform code that provisions all AWS prerequisites for the full two-component system (both `awspim` and `awspim-manager`):
+
+| Resource | Purpose |
+|----------|---------|
+| SQS request queue + DLQ | Approval requests from `awspim` → `awspim-manager` |
+| SQS response queue + DLQ | Results from `awspim-manager` → `awspim` |
+| DynamoDB table | Active/expired session tracking |
+| Secrets Manager — accounts | List of AWS accounts users can request access to |
+| Secrets Manager — approvers | List of authorized approver emails (used by `awspim-manager`) |
+| Secrets Manager — MFA | TOTP registration storage (managed by `awspim` at runtime) |
+| SES email template | MFA verification emails |
+| IAM role — bot | Permissions for the `awspim` Slack bot |
+| IAM role — Lambda | Permissions for the `awspim-manager` Lambda |
+| Lambda function | `awspim-manager` deployment (zip/binary) |
+| EventBridge rule | Triggers Lambda every 15 min to revoke expired sessions |
+| ECR repository | Docker images for the `awspim` Slack bot |
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# edit terraform.tfvars with your values
+terraform init
+terraform plan
+terraform apply
+# after apply:
+terraform output awspim_config_snippet  # ready-to-paste config.yaml values
+```
 
 ## 🏗️ Architecture
 
