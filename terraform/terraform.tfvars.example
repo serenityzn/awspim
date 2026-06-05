@@ -1,0 +1,22 @@
+aws_region  = "us-east-2"
+environment = "prod"
+prefix      = "pim"
+
+# Required — path to the awspim-manager compiled zip (Go binary named "bootstrap")
+manager_lambda_zip_path = "../awspim-manager/dist/awspim-manager.zip"
+
+# Required — must be a verified SES email address
+ses_from_email = "noreply@yourdomain.com"
+
+# Required — 12-digit AWS management/org account ID (requests to this account are blocked)
+management_account_id = "123456789012"
+
+# Optional — Identity Center permission set to grant (default: AdministratorAccess)
+pim_permission_set_name = "AdministratorAccess"
+
+# Optional — session duration in seconds (default: 3600 = 1 hour)
+session_timeout_seconds = 3600
+
+tags = {
+  Team = "platform"
+}
