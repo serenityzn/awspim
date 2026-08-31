@@ -55,7 +55,7 @@ Both components communicate exclusively via **two AWS SQS queues** — no direct
 ## 📋 Features
 
 - **Slack Integration**: Slash commands for requesting AWS access
-- **Multi-Factor Authentication**: TOTP + Email verification for enhanced security
+- **Multi-Factor Authentication**: TOTP always; extra email verification code optional (enabled by default)
 - **Approval Workflow**: Interactive buttons and modal windows for approve/deny decisions
 - **AWS Integration**: SQS notifications, SES email delivery, and Secrets Manager for account data
 - **Security**: Channel restrictions, admin user management, and duplicate approval prevention
@@ -101,6 +101,7 @@ response_sqs_url: "https://sqs.us-east-2.amazonaws.com/123456789012/pim-response
 
 # Multi-Factor Authentication (MFA)
 require_multi_factor_auth: true
+require_email_verification: true  # extra email code on top of TOTP; set false to disable
 ses_from_email: "noreply@yourdomain.com"
 email_template_name: "PIM-MFA-Template"
 totp_issuer: "AWS PIM"
@@ -119,6 +120,7 @@ allowed_email_domains:
 | `aws_region` | `AWS_REGION` or `AWSPIM_AWS_REGION` |
 | `aws_accounts_secret` | `AWS_ACCOUNTS_SECRET` or `AWSPIM_AWS_ACCOUNTS_SECRET` |
 | `require_multi_factor_auth` | `REQUIRE_MULTI_FACTOR_AUTH` or `AWSPIM_REQUIRE_MULTI_FACTOR_AUTH` |
+| `require_email_verification` | `REQUIRE_EMAIL_VERIFICATION` or `AWSPIM_REQUIRE_EMAIL_VERIFICATION` (default: `true`) |
 | `ses_from_email` | `SES_FROM_EMAIL` or `AWSPIM_SES_FROM_EMAIL` |
 | `email_template_name` | `EMAIL_TEMPLATE_NAME` or `AWSPIM_EMAIL_TEMPLATE_NAME` |
 | `mfa_storage_secret` | `MFA_STORAGE_SECRET` or `AWSPIM_MFA_STORAGE_SECRET` |
@@ -287,7 +289,7 @@ Create these slash commands:
 - `/pim [account-id]` - Request access to AWS account
 - `/acc` - List available AWS accounts
 - `/register-totp` - Register for TOTP multi-factor authentication
-- `/verify-approval <email-code> <totp-code>` - Verify approval with MFA codes (backup method)
+- `/verify-approval <totp-code>` — or `/verify-approval <email-code> <totp-code>` when email verification is enabled
 
 ### 5. Configure Interactivity
 1. Enable Interactivity & Shortcuts
@@ -315,9 +317,10 @@ Create these slash commands:
 
 **Verify Approval (Backup Method):**
 ```
-/verify-approval 123456 789012
+/verify-approval 654321
+/verify-approval 123456 654321
 ```
-*Format: `/verify-approval <email-code> <totp-code>`*
+*TOTP only when `require_email_verification` is `false`. Email + TOTP when it is `true` (default).*
 
 ### Approval Workflow
 
@@ -338,12 +341,12 @@ Create these slash commands:
    - Registration success/failure message is sent to channel and DM
 
 2. **Approval with MFA**: When approver clicks "✅ Approve Access":
-   - Bot sends email verification code to approver's registered email
+   - If `require_email_verification` is `true` (default), bot sends an email verification code to the approver
    - Bot displays MFA verification interface with "🔐 Open Verification Form" button
-   - Approver clicks button to open modal with input fields for:
-     - Email verification code (from email)
-     - TOTP code (from authenticator app)
-   - Alternatively, approver can use `/verify-approval <email-code> <totp-code>` command
+   - Approver clicks button to open a modal and enters:
+     - TOTP code (from authenticator app) — always required
+     - Email verification code — only when `require_email_verification` is `true`
+   - Alternatively, approver can use `/verify-approval` (TOTP only, or email + TOTP depending on config)
    - Upon successful verification:
      - Bot processes the approval and sends SQS notification
      - Original approval message buttons are disabled
@@ -364,9 +367,9 @@ The authoritative per-account approver allowlist is managed entirely by [awspim-
 To grant or revoke approval rights for an account, configure it in `awspim-manager`.
 
 ### Security Features
-- **Multi-Factor Authentication**: TOTP + Email verification for approvers
-  - TOTP codes from authenticator apps (Google Authenticator, Authy, etc.)
-  - Email verification codes sent to registered email addresses
+- **Multi-Factor Authentication**: TOTP for approvers; extra email code optional (`require_email_verification`, default `true`)
+  - TOTP codes from authenticator apps (Google Authenticator, Authy, etc.) — always required when MFA is on
+  - Email verification codes sent to registered email addresses (can be disabled)
   - Automatic email retrieval from Slack user profiles
   - Secure backup codes for account recovery
 - **Channel Restriction**: Commands only work in configured channel (default: `pim-management`)
