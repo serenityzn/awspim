@@ -21,6 +21,7 @@ admin_users:
 
 # Multi-Factor Authentication Configuration (OPTIONAL - for enhanced approval security)
 require_multi_factor_auth: false
+require_email_verification: true  # extra email code on top of TOTP; set false to disable
 ses_from_email: "noreply@company.com"
 totp_issuer: "AWS PIM"
 mfa_storage_secret: "pim/mfa-registrations"  # Secrets Manager secret name for storing user 2FA registrations
@@ -40,6 +41,7 @@ allowed_email_domains:
 # allowed_channel      → AWSPIM_ALLOWED_CHANNEL
 # admin_users          → AWSPIM_ADMIN_USERS (comma-separated)
 # require_multi_factor_auth → AWSPIM_REQUIRE_MULTI_FACTOR_AUTH
+# require_email_verification → AWSPIM_REQUIRE_EMAIL_VERIFICATION or REQUIRE_EMAIL_VERIFICATION
 # ses_from_email       → AWSPIM_SES_FROM_EMAIL or SES_FROM_EMAIL
 # totp_issuer          → AWSPIM_TOTP_ISSUER
 # mfa_storage_secret   → AWSPIM_MFA_STORAGE_SECRET or MFA_STORAGE_SECRET

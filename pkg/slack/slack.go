@@ -49,6 +49,13 @@ func msgOpt(text string) slack.MsgOption {
 	return slack.MsgOptionText(text, false)
 }
 
+func verifyApprovalUsage(emailEnabled bool) string {
+	if emailEnabled {
+		return "`/verify-approval <email-code> <totp-code>`"
+	}
+	return "`/verify-approval <totp-code>`"
+}
+
 // NewSlackClient creates a new Slack client
 func NewSlackClient() (*SlackClient, error) {
 	cfg := config.Get()
@@ -140,7 +147,8 @@ func StartSlackBot() error {
 			"action": "totp_authenticator_created",
 			"storage_backend": "secretsmanager",
 			"storage_secret": cfg.GetMFAStorageSecret(),
-		}).Info("TOTP + Email authenticator initialized successfully")
+			"email_verification": cfg.IsRequireEmailVerification(),
+		}).Info("TOTP authenticator initialized successfully")
 	} else {
 		log.LogSlackOperation("mfa_initialization", logger.Fields{"action": "mfa_disabled"}).Info("Multi-factor authentication not enabled - using legacy approval flow")
 	}
@@ -562,30 +570,53 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 				return nil
 			}
 
-			// Parse parameters: /verify-approval <email-code> <totp-code>
+			// Parse parameters
+			emailEnabled := cfg.IsRequireEmailVerification()
 			params := strings.Fields(cmd.Text)
-			if len(params) != 2 {
-				message := "❌ **Invalid Usage**\n\nUsage: `/verify-approval <email-code> <totp-code>`\n\nExample: `/verify-approval 123456 654321`"
-				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
-				if err != nil {
-					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send usage message")
-					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
-				}
-				return nil
-			}
+			emailCode := ""
+			totpCode := ""
 
-			emailCode := strings.TrimSpace(params[0])
-			totpCode := strings.TrimSpace(params[1])
-
-			// Validate codes format
-			if len(emailCode) != 6 || len(totpCode) != 6 {
-				message := "❌ **Invalid Code Format**\n\nBoth email and TOTP codes must be exactly 6 digits."
-				_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
-				if err != nil {
-					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send invalid format message")
-					return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
+			if emailEnabled {
+				if len(params) != 2 {
+					message := "❌ **Invalid Usage**\n\nUsage: `/verify-approval <email-code> <totp-code>`\n\nExample: `/verify-approval 123456 654321`"
+					_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
+					if err != nil {
+						log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send usage message")
+						return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
+					}
+					return nil
 				}
-				return nil
+				emailCode = strings.TrimSpace(params[0])
+				totpCode = strings.TrimSpace(params[1])
+				if len(emailCode) != 6 || len(totpCode) != 6 {
+					message := "❌ **Invalid Code Format**\n\nBoth email and TOTP codes must be exactly 6 digits."
+					_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
+					if err != nil {
+						log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send invalid format message")
+						return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
+					}
+					return nil
+				}
+			} else {
+				if len(params) != 1 {
+					message := "❌ **Invalid Usage**\n\nUsage: `/verify-approval <totp-code>`\n\nExample: `/verify-approval 654321`"
+					_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
+					if err != nil {
+						log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send usage message")
+						return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
+					}
+					return nil
+				}
+				totpCode = strings.TrimSpace(params[0])
+				if len(totpCode) != 6 {
+					message := "❌ **Invalid Code Format**\n\nTOTP code must be exactly 6 digits."
+					_, _, err := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
+					if err != nil {
+						log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(err).Error("Failed to send invalid format message")
+						return errors.NewSlackError("failed to send message", err).WithContext("channel_id", cmd.ChannelID)
+					}
+					return nil
+				}
 			}
 
 			// Check if user has pending verification
@@ -607,7 +638,10 @@ func (h *handler) HandleCommand(evt *socketmode.Event, client *socketmode.Client
 					"error": err.Error(),
 				}).WithError(err).Error("Approval verification failed via command")
 
-				message := "❌ **Verification Failed**\n\nInvalid email or TOTP code. Please check your codes and try again."
+				message := "❌ **Verification Failed**\n\nInvalid TOTP code. Please check your codes and try again."
+				if emailEnabled {
+					message = "❌ **Verification Failed**\n\nInvalid email or TOTP code. Please check your codes and try again."
+				}
 				_, _, msgErr := h.client.PostMessage(cmd.ChannelID, msgOpt(message))
 				if msgErr != nil {
 					log.LogSlackOperation("send_message", logger.Fields{"channel_id": cmd.ChannelID}).WithError(msgErr).Error("Failed to send verification failure message")
@@ -915,10 +949,17 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 								// let's use an immediate follow-up approach:
 								// Send an ephemeral message with a button that opens the modal
 								
-								message := fmt.Sprintf("🔐 **Multi-Factor Authentication Required**\n\n**Account:** %s (%s)\n**Requestor:** %s\n\n📧 Email verification sent! Click below to open verification form:", 
-									utils.SanitizeUserInput(accountName), 
-									utils.SanitizeUserInput(accountID), 
+								emailEnabled := cfg.IsRequireEmailVerification()
+								message := fmt.Sprintf("🔐 **Multi-Factor Authentication Required**\n\n**Account:** %s (%s)\n**Requestor:** %s\n\n🔑 Enter your TOTP code from your authenticator app:",
+									utils.SanitizeUserInput(accountName),
+									utils.SanitizeUserInput(accountID),
 									utils.SanitizeUserInput(requestorUsername))
+								if emailEnabled {
+									message = fmt.Sprintf("🔐 **Multi-Factor Authentication Required**\n\n**Account:** %s (%s)\n**Requestor:** %s\n\n📧 Email verification sent! Click below to open verification form:",
+										utils.SanitizeUserInput(accountName),
+										utils.SanitizeUserInput(accountID),
+										utils.SanitizeUserInput(requestorUsername))
+								}
 								
 								// Create a button that will trigger the modal
 								modalButton := slack.NewButtonBlockElement("open_mfa_modal", approvalData, slack.NewTextBlockObject("plain_text", "🔐 Open Verification Form", false, false))
@@ -926,7 +967,8 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 								
 								actionBlock := slack.NewActionBlock("mfa_modal_trigger", modalButton)
 								
-								fallbackText := fmt.Sprintf("Use command: /verify-approval <email-code> <totp-code>")
+								usage := verifyApprovalUsage(emailEnabled)
+								fallbackText := fmt.Sprintf("Use command: %s", usage)
 								
 								blocks := []slack.Block{
 									slack.NewSectionBlock(
@@ -935,7 +977,7 @@ func (h *handler) HandleInteraction(evt *socketmode.Event, client *socketmode.Cl
 									),
 									actionBlock,
 									slack.NewSectionBlock(
-										slack.NewTextBlockObject("mrkdwn", "💡 *Alternative:* Use `/verify-approval <email-code> <totp-code>` command", false, false),
+										slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("💡 *Alternative:* Use %s command", usage), false, false),
 										nil, nil,
 									),
 								}
@@ -1288,7 +1330,10 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 		}).WithError(err).Error("Approval verification failed")
 
 		// Send failure message
-		message := "❌ **Verification Failed**\n\nInvalid email or TOTP code. Please try the approval again."
+		message := "❌ **Verification Failed**\n\nInvalid TOTP code. Please try the approval again."
+		if config.Get().IsRequireEmailVerification() {
+			message = "❌ **Verification Failed**\n\nInvalid email or TOTP code. Please try the approval again."
+		}
 		_, _, msgErr := h.client.PostMessage(interaction.User.ID, msgOpt(message))
 		if msgErr != nil {
 			log.LogSlackOperation("send_verification_failure_dm", logger.Fields{
@@ -1326,11 +1371,16 @@ func (h *handler) handleApprovalVerification(interaction slack.InteractionCallba
 
 	// Update the original approval message to remove buttons (mark as completed)
 	if channelID != "" && messageTimestamp != "" {
-		completedText := fmt.Sprintf("✅ **Access Approved via Multi-Factor Authentication**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** <@%s>\n\n🔐 Verified with Email + TOTP codes\n📨 Management notification sent", 
+		verifiedWith := "TOTP"
+		if config.Get().IsRequireEmailVerification() {
+			verifiedWith = "Email + TOTP codes"
+		}
+		completedText := fmt.Sprintf("✅ **Access Approved via Multi-Factor Authentication**\n\n**Account:** %s (%s)\n**Requestor:** %s\n**Approved by:** <@%s>\n\n🔐 Verified with %s\n📨 Management notification sent", 
 			utils.SanitizeUserInput(accountName),
 			utils.SanitizeUserInput(accountID),
 			utils.SanitizeUserInput(requestorUsername),
-			approverUserID)
+			approverUserID,
+			verifiedWith)
 		
 		_, _, _, updateErr := h.client.UpdateMessage(
 			channelID,
@@ -1527,6 +1577,62 @@ func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction s
 	accountID := parts[2]
 	accountName := parts[3]
 	// parts[4] is channelID and parts[5] is messageTimestamp - will be used in modal metadata
+
+	cfg := config.Get()
+	emailEnabled := cfg.IsRequireEmailVerification()
+
+	introText := fmt.Sprintf("🔐 **Multi-Factor Authentication Required**\n\n**Account:** %s (%s)\n**Requestor:** %s\n\n🔑 Enter your TOTP code from your authenticator app:", utils.SanitizeUserInput(accountName), utils.SanitizeUserInput(accountID), utils.SanitizeUserInput(requestorUsername))
+	if emailEnabled {
+		introText = fmt.Sprintf("🔐 **Multi-Factor Authentication Required**\n\n**Account:** %s (%s)\n**Requestor:** %s\n\n📧 Check your email for verification code\n🔑 Enter codes below to approve access:", utils.SanitizeUserInput(accountName), utils.SanitizeUserInput(accountID), utils.SanitizeUserInput(requestorUsername))
+	}
+
+	blocks := []slack.Block{
+		&slack.SectionBlock{
+			Type: slack.MBTSection,
+			Text: &slack.TextBlockObject{
+				Type: slack.MarkdownType,
+				Text: introText,
+			},
+		},
+	}
+	if emailEnabled {
+		blocks = append(blocks, &slack.InputBlock{
+			Type:    slack.MBTInput,
+			BlockID: "email_code",
+			Label: &slack.TextBlockObject{
+				Type: slack.PlainTextType,
+				Text: "Email Verification Code",
+			},
+			Element: &slack.PlainTextInputBlockElement{
+				Type:        slack.METPlainTextInput,
+				ActionID:    "email_code_input",
+				Placeholder: &slack.TextBlockObject{
+					Type: slack.PlainTextType,
+					Text: "123456",
+				},
+				MaxLength: 6,
+				MinLength: 6,
+			},
+		})
+	}
+	blocks = append(blocks, &slack.InputBlock{
+		Type:    slack.MBTInput,
+		BlockID: "totp_code",
+		Label: &slack.TextBlockObject{
+			Type: slack.PlainTextType,
+			Text: "TOTP Code (from authenticator app)",
+		},
+		Element: &slack.PlainTextInputBlockElement{
+			Type:        slack.METPlainTextInput,
+			ActionID:    "totp_code_input",
+			Placeholder: &slack.TextBlockObject{
+				Type: slack.PlainTextType,
+				Text: "123456",
+			},
+			MaxLength: 6,
+			MinLength: 6,
+		},
+	})
 	
 	// Create the modal
 	modalView := slack.ModalViewRequest{
@@ -1536,51 +1642,7 @@ func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction s
 			Text: "Verify Approval",
 		},
 		Blocks: slack.Blocks{
-			BlockSet: []slack.Block{
-				&slack.SectionBlock{
-					Type: slack.MBTSection,
-					Text: &slack.TextBlockObject{
-						Type: slack.MarkdownType,
-						Text: fmt.Sprintf("🔐 **Multi-Factor Authentication Required**\n\n**Account:** %s (%s)\n**Requestor:** %s\n\n📧 Check your email for verification code\n🔑 Enter codes below to approve access:", utils.SanitizeUserInput(accountName), utils.SanitizeUserInput(accountID), utils.SanitizeUserInput(requestorUsername)),
-					},
-				},
-				&slack.InputBlock{
-					Type:    slack.MBTInput,
-					BlockID: "email_code",
-					Label: &slack.TextBlockObject{
-						Type: slack.PlainTextType,
-						Text: "Email Verification Code",
-					},
-					Element: &slack.PlainTextInputBlockElement{
-						Type:        slack.METPlainTextInput,
-						ActionID:    "email_code_input",
-						Placeholder: &slack.TextBlockObject{
-							Type: slack.PlainTextType,
-							Text: "123456",
-						},
-						MaxLength: 6,
-						MinLength: 6,
-					},
-				},
-				&slack.InputBlock{
-					Type:    slack.MBTInput,
-					BlockID: "totp_code",
-					Label: &slack.TextBlockObject{
-						Type: slack.PlainTextType,
-						Text: "TOTP Code (from authenticator app)",
-					},
-					Element: &slack.PlainTextInputBlockElement{
-						Type:        slack.METPlainTextInput,
-						ActionID:    "totp_code_input",
-						Placeholder: &slack.TextBlockObject{
-							Type: slack.PlainTextType,
-							Text: "123456",
-						},
-						MaxLength: 6,
-						MinLength: 6,
-					},
-				},
-			},
+			BlockSet: blocks,
 		},
 		Submit: &slack.TextBlockObject{
 			Type: slack.PlainTextType,
@@ -1606,7 +1668,7 @@ func (h *handler) handleMFAModalTrigger(action *slack.BlockAction, interaction s
 		}).WithError(err).Error("Failed to open MFA modal from button")
 		
 		// Send fallback message
-		fallbackMessage := fmt.Sprintf("❌ **Modal Failed**\n\nUnable to open verification form. Use `/verify-approval <email-code> <totp-code>` command instead.")
+		fallbackMessage := fmt.Sprintf("❌ **Modal Failed**\n\nUnable to open verification form. Use %s command instead.", verifyApprovalUsage(emailEnabled))
 		_, msgErr := h.client.PostEphemeral(
 			interaction.Channel.ID,
 			interaction.User.ID,

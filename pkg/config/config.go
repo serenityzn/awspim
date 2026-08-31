@@ -29,11 +29,12 @@ type Config struct {
 	AllowedChannel string   `mapstructure:"allowed_channel"`
 	
 	// Multi-Factor Authentication Configuration
-	SESFromEmail           string   `mapstructure:"ses_from_email"`
-	AllowedEmailDomains    []string `mapstructure:"allowed_email_domains"`
-	RequireMultiFactorAuth bool     `mapstructure:"require_multi_factor_auth"`
-	TOTPIssuer             string   `mapstructure:"totp_issuer"`
-	MFAStorageSecret       string   `mapstructure:"mfa_storage_secret"` // Secrets Manager secret name for storing user 2FA registrations
+	SESFromEmail              string   `mapstructure:"ses_from_email"`
+	AllowedEmailDomains       []string `mapstructure:"allowed_email_domains"`
+	RequireMultiFactorAuth    bool     `mapstructure:"require_multi_factor_auth"`
+	RequireEmailVerification  bool     `mapstructure:"require_email_verification"` // extra email code on top of TOTP; default true
+	TOTPIssuer                string   `mapstructure:"totp_issuer"`
+	MFAStorageSecret          string   `mapstructure:"mfa_storage_secret"` // Secrets Manager secret name for storing user 2FA registrations
 
 	// Response queue — assigner sends results back here
 	ResponseSQSURL string `mapstructure:"response_sqs_url"`
@@ -73,6 +74,7 @@ func Load() (*Config, error) {
 	v.BindEnv("allowed_channel", "AWSPIM_ALLOWED_CHANNEL")
 	v.BindEnv("admin_users", "AWSPIM_ADMIN_USERS")
 	v.BindEnv("require_multi_factor_auth", "AWSPIM_REQUIRE_MULTI_FACTOR_AUTH")
+	v.BindEnv("require_email_verification", "AWSPIM_REQUIRE_EMAIL_VERIFICATION", "REQUIRE_EMAIL_VERIFICATION")
 	v.BindEnv("ses_from_email", "AWSPIM_SES_FROM_EMAIL", "SES_FROM_EMAIL")
 	v.BindEnv("totp_issuer", "AWSPIM_TOTP_ISSUER")
 	v.BindEnv("allowed_email_domains", "AWSPIM_ALLOWED_EMAIL_DOMAINS")
@@ -139,6 +141,7 @@ func setDefaults(v *viper.Viper) {
 	
 	// Multi-factor authentication defaults
 	v.SetDefault("require_multi_factor_auth", false)
+	v.SetDefault("require_email_verification", true)
 	v.SetDefault("allowed_email_domains", []string{"company.com"})
 	v.SetDefault("totp_issuer", "AWS PIM")
 	v.SetDefault("mfa_storage_secret", "pim/mfa-registrations")
@@ -162,8 +165,8 @@ func validateConfig(config *Config) error {
 		missing = append(missing, "manager_sqs_arn (AWSPIM_MANAGER_SQS_ARN or MANAGER_SQS_ARN)")
 	}
 	
-	// Check required Multi-factor authentication configuration (only if MFA is enabled)
-	if config.RequireMultiFactorAuth && config.SESFromEmail == "" {
+	// SES is only required when MFA is on and the extra email code is enabled
+	if config.RequireMultiFactorAuth && config.RequireEmailVerification && config.SESFromEmail == "" {
 		missing = append(missing, "ses_from_email (AWSPIM_SES_FROM_EMAIL or SES_FROM_EMAIL)")
 	}
 	
@@ -245,6 +248,11 @@ func (c *Config) GetAllowedEmailDomains() []string {
 // IsRequireMultiFactorAuth returns whether multi-factor authentication is required
 func (c *Config) IsRequireMultiFactorAuth() bool {
 	return c.RequireMultiFactorAuth
+}
+
+// IsRequireEmailVerification returns whether the extra email verification code is required (in addition to TOTP)
+func (c *Config) IsRequireEmailVerification() bool {
+	return c.RequireEmailVerification
 }
 
 // GetTOTPIssuer returns the TOTP issuer name
