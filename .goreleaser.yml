@@ -60,8 +60,6 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/serenityzn/awspim"
-    extra_files:
-      - ca-certificates.crt
 
   - id: awspim-arm64
     goos: linux
@@ -78,8 +76,6 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/serenityzn/awspim"
-    extra_files:
-      - ca-certificates.crt
 
 docker_manifests:
   - name_template: "ghcr.io/serenityzn/awspim:{{ .Tag }}"
