@@ -154,6 +154,7 @@ func (t *TOTPEmailAuthenticator) CompleteRegistration(userID, emailCode, totpCod
 // InitiateApproval starts the approval verification process
 func (t *TOTPEmailAuthenticator) InitiateApproval(userID string, approvalData map[string]interface{}) (string, error) {
 	log := logger.GetDefaultLogger()
+	cfg := config.Get()
 	
 	// Check if user is registered
 	registration, err := t.storage.GetRegistration(userID)
@@ -161,11 +162,14 @@ func (t *TOTPEmailAuthenticator) InitiateApproval(userID string, approvalData ma
 		return "", errors.NewSecurityError("user not registered for multi-factor authentication", nil).
 			WithContext("user_id", userID)
 	}
-	
-	// Generate email verification code
-	emailCode, err := t.generateEmailCode()
-	if err != nil {
-		return "", errors.NewInternalError("failed to generate email code", err)
+
+	emailEnabled := cfg.IsRequireEmailVerification()
+	emailCode := ""
+	if emailEnabled {
+		emailCode, err = t.generateEmailCode()
+		if err != nil {
+			return "", errors.NewInternalError("failed to generate email code", err)
+		}
 	}
 	
 	// Create pending verification
@@ -184,26 +188,28 @@ func (t *TOTPEmailAuthenticator) InitiateApproval(userID string, approvalData ma
 	t.pendingVerifications[userID] = verification
 	t.mutex.Unlock()
 	
-	// Send email with code
-	err = t.sendVerificationEmail(registration.Email, emailCode, approvalData)
-	if err != nil {
-		// Clean up on failure
-		t.mutex.Lock()
-		delete(t.pendingVerifications, userID)
-		t.mutex.Unlock()
-		return "", errors.NewInternalError("failed to send verification email", err)
+	if emailEnabled {
+		err = t.sendVerificationEmail(registration.Email, emailCode, approvalData)
+		if err != nil {
+			t.mutex.Lock()
+			delete(t.pendingVerifications, userID)
+			t.mutex.Unlock()
+			return "", errors.NewInternalError("failed to send verification email", err)
+		}
 	}
 	
 	log.LogUserAction(userID, "approval_verification_initiated", logger.Fields{
-		"email": utils.SanitizeUserInput(registration.Email),
+		"email":                    utils.SanitizeUserInput(registration.Email),
+		"email_verification":       emailEnabled,
 	}).Info("Approval verification initiated")
 	
 	return emailCode, nil
 }
 
-// VerifyApproval verifies email code + TOTP code for approval
+// VerifyApproval verifies TOTP (and email code when enabled) for approval
 func (t *TOTPEmailAuthenticator) VerifyApproval(userID, emailCode, totpCode string) (*PendingVerification, error) {
 	log := logger.GetDefaultLogger()
+	cfg := config.Get()
 	
 	t.mutex.Lock()
 	verification, exists := t.pendingVerifications[userID]
@@ -245,18 +251,19 @@ func (t *TOTPEmailAuthenticator) VerifyApproval(userID, emailCode, totpCode stri
 		return nil, errors.NewSecurityError("user not registered", nil)
 	}
 	
-	// Validate email code
-	if verification.EmailCode != emailCode {
-		t.mutex.Lock()
-		verification.FailedAttempts++
-		t.mutex.Unlock()
-		
-		log.LogSecurityEvent("invalid_email_code", logger.Fields{
-			"user_id": userID,
-			"email":   utils.SanitizeUserInput(registration.Email),
-			"attempts": verification.FailedAttempts,
-		}).Warn("Invalid email code provided")
-		return nil, errors.NewSecurityError("invalid email code", nil)
+	if cfg.IsRequireEmailVerification() {
+		if verification.EmailCode != emailCode {
+			t.mutex.Lock()
+			verification.FailedAttempts++
+			t.mutex.Unlock()
+			
+			log.LogSecurityEvent("invalid_email_code", logger.Fields{
+				"user_id": userID,
+				"email":   utils.SanitizeUserInput(registration.Email),
+				"attempts": verification.FailedAttempts,
+			}).Warn("Invalid email code provided")
+			return nil, errors.NewSecurityError("invalid email code", nil)
+		}
 	}
 	
 	// Validate TOTP code
